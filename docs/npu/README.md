@@ -7,6 +7,7 @@ This directory contains documentation for the RKNPU2 backend that provides neura
 - [Getting Started](GETTING_STARTED.md) - Quick start guide for building and running
 - [Environment Variables](ENVIRONMENT.md) - Configuration via environment variables
 - [Performance Tuning](PERFORMANCE.md) - Optimization and benchmarking
+- [Testing Guide](TESTING.md) - Comprehensive test plan for verification
 
 ## Overview
 
