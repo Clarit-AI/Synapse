@@ -440,14 +440,16 @@ void ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event)
 
 #define GGML_REG_MAX_BACKENDS 64
 
-struct ggml_backend_reg {
+// Flat registry entry - internal use only
+// NOTE: This is distinct from the device-aware ggml_backend_reg in ggml-backend-impl.h
+struct ggml_backend_registry_entry {
     char name[128];
     ggml_backend_init_fn init_fn;
     ggml_backend_buffer_type_t default_buffer_type;
     void * user_data;
 };
 
-static struct ggml_backend_reg ggml_backend_registry[GGML_REG_MAX_BACKENDS];
+static struct ggml_backend_registry_entry ggml_backend_registry[GGML_REG_MAX_BACKENDS];
 static size_t ggml_backend_registry_count = 0;
 
 GGML_CALL static ggml_backend_t ggml_backend_reg_cpu_init(const char * params, void * user_data);
@@ -473,6 +475,9 @@ extern "C" GGML_CALL int ggml_backend_cann_reg_devices(void);
 #endif
 #ifdef GGML_USE_RPC
 extern "C" GGML_CALL void ggml_backend_rpc_reg_devices(void);
+#endif
+#ifdef GGML_USE_RKNPU2
+extern "C" GGML_CALL int ggml_backend_rknpu_reg_devices(void);
 #endif
 
 GGML_CALL static void ggml_backend_registry_init(void) {
@@ -513,6 +518,9 @@ GGML_CALL static void ggml_backend_registry_init(void) {
 #ifdef GGML_USE_RPC
     ggml_backend_rpc_reg_devices();
 #endif
+#ifdef GGML_USE_RKNPU2
+    ggml_backend_rknpu_reg_devices();
+#endif
 }
 
 GGML_CALL void ggml_backend_register(const char * name, ggml_backend_init_fn init_fn, ggml_backend_buffer_type_t default_buffer_type, void * user_data) {
@@ -520,9 +528,9 @@ GGML_CALL void ggml_backend_register(const char * name, ggml_backend_init_fn ini
 
     size_t id = ggml_backend_registry_count;
 
-    ggml_backend_registry[id] = ggml_backend_reg {
+    ggml_backend_registry[id] = ggml_backend_registry_entry {
         /* .name                = */ {0},
-        /* .fn                  = */ init_fn,
+        /* .init_fn             = */ init_fn,
         /* .default_buffer_type = */ default_buffer_type,
         /* .user_data           = */ user_data
     };
@@ -616,6 +624,332 @@ ggml_backend_buffer_t ggml_backend_reg_alloc_buffer(size_t i, size_t size) {
 
     GGML_ASSERT(i < ggml_backend_registry_count);
     return ggml_backend_buft_alloc_buffer(ggml_backend_registry[i].default_buffer_type, size);
+}
+
+//
+// Device-aware registry layer
+// Wraps flat registry entries into device-aware format for multi-device support
+//
+
+// Adapter for flat backends (CPU, Metal) to device-aware API
+struct ggml_backend_dev_adapter {
+    ggml_backend_dev_t dev;  // the wrapped device
+    size_t flat_backend_idx; // index into flat registry
+};
+
+// Device wrapper for simple backends (CPU, Metal, etc.)
+struct ggml_backend_simple_device {
+    struct ggml_backend_device base;  // must be first
+    char name[64];
+    char description[128];
+    size_t flat_backend_idx;
+};
+
+// Registry wrapper for simple backends
+struct ggml_backend_simple_reg {
+    struct ggml_backend_reg base;  // must be first
+    char name[128];
+    size_t flat_backend_idx;
+};
+
+// Get device count for simple backend registry
+static size_t ggml_backend_simple_reg_get_device_count(ggml_backend_reg_t reg) {
+    GGML_UNUSED(reg);
+    return 1; // CPU has 1 device
+}
+
+// Get device for simple backend registry
+static ggml_backend_dev_t ggml_backend_simple_reg_get_device(ggml_backend_reg_t reg, size_t index) {
+    struct ggml_backend_simple_reg * simple_reg = (struct ggml_backend_simple_reg *)reg;
+    GGML_UNUSED(index);
+    GGML_ASSERT(index == 0); // CPU has only 1 device
+    return (ggml_backend_dev_t)&simple_reg->base.context; // Return the wrapped device
+}
+
+// Get name for simple backend registry
+static const char * ggml_backend_simple_reg_get_name(ggml_backend_reg_t reg) {
+    struct ggml_backend_simple_reg * simple_reg = (struct ggml_backend_simple_reg *)reg;
+    return simple_reg->name;
+}
+
+// Get proc address (not used for simple backends)
+static void * ggml_backend_simple_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    GGML_UNUSED(reg);
+    GGML_UNUSED(name);
+    return NULL;
+}
+
+// Simple backend device interface functions
+static const char * ggml_backend_simple_dev_get_name(ggml_backend_dev_t dev) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    return simple_dev->name;
+}
+
+static const char * ggml_backend_simple_dev_get_description(ggml_backend_dev_t dev) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    return simple_dev->description;
+}
+
+static void ggml_backend_simple_dev_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+    GGML_UNUSED(dev);
+    // Report system memory for CPU
+    // TODO: implement proper memory detection
+    *free = 0;
+    *total = 0;
+}
+
+static enum ggml_backend_dev_type ggml_backend_simple_dev_get_type(ggml_backend_dev_t dev) {
+    GGML_UNUSED(dev);
+    return GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
+static void ggml_backend_simple_dev_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    props->name = simple_dev->name;
+    props->description = simple_dev->description;
+    props->memory_free = 0;
+    props->memory_total = 0;
+    props->type = GGML_BACKEND_DEVICE_TYPE_CPU;
+    props->device_id = "";
+}
+
+static ggml_backend_t ggml_backend_simple_dev_init_backend(ggml_backend_dev_t dev, const char * params) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    ggml_backend_registry_init();
+    return ggml_backend_registry[simple_dev->flat_backend_idx].init_fn(params, ggml_backend_registry[simple_dev->flat_backend_idx].user_data);
+}
+
+static ggml_backend_buffer_type_t ggml_backend_simple_dev_get_buffer_type(ggml_backend_dev_t dev) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    ggml_backend_registry_init();
+    return ggml_backend_registry[simple_dev->flat_backend_idx].default_buffer_type;
+}
+
+static bool ggml_backend_simple_dev_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    GGML_UNUSED(dev);
+    // For CPU, delegate to the backend's supports_op
+    // This is a simplified implementation
+    return true;
+}
+
+static bool ggml_backend_simple_dev_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(dev);
+    GGML_UNUSED(buft);
+    return true;
+}
+
+static bool ggml_backend_simple_dev_offload_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    GGML_UNUSED(dev);
+    GGML_UNUSED(op);
+    return false;
+}
+
+// Global storage for device-aware registries and devices
+#define MAX_DEVICE_AWARE_REGS 16
+#define MAX_EXTERNAL_REGS 8
+
+static struct ggml_backend_simple_reg g_device_aware_regs[MAX_DEVICE_AWARE_REGS];
+static size_t g_device_aware_reg_count = 0;
+
+static struct ggml_backend_simple_device g_simple_devices[MAX_DEVICE_AWARE_REGS];
+static size_t g_simple_device_count = 0;
+
+// External device-aware registries (e.g., RKNPU2, CUDA, Vulkan)
+static ggml_backend_reg_t g_external_regs[MAX_EXTERNAL_REGS];
+static size_t g_external_reg_count = 0;
+
+// Initialize device-aware layer from flat registry
+static void ggml_backend_device_aware_init(void) {
+    static bool initialized = false;
+    if (initialized) {
+        return;
+    }
+    initialized = true;
+
+    ggml_backend_registry_init();
+
+    // Wrap each flat backend as a device-aware registry with 1 device
+    for (size_t i = 0; i < ggml_backend_registry_count && g_device_aware_reg_count < MAX_DEVICE_AWARE_REGS; i++) {
+        struct ggml_backend_simple_reg * reg = &g_device_aware_regs[g_device_aware_reg_count];
+        struct ggml_backend_simple_device * dev = &g_simple_devices[g_device_aware_reg_count];
+
+        // Initialize registry interface
+        reg->base.api_version = GGML_BACKEND_API_VERSION;
+        reg->base.iface.get_name = ggml_backend_simple_reg_get_name;
+        reg->base.iface.get_device_count = ggml_backend_simple_reg_get_device_count;
+        reg->base.iface.get_device = ggml_backend_simple_reg_get_device;
+        reg->base.iface.get_proc_address = ggml_backend_simple_reg_get_proc_address;
+        reg->base.context = (void *)g_simple_device_count; // device index stored in context
+        snprintf(reg->name, sizeof(reg->name), "%s", ggml_backend_registry[i].name);
+        reg->flat_backend_idx = i;
+
+        // Initialize device interface
+        dev->base.iface.get_name = ggml_backend_simple_dev_get_name;
+        dev->base.iface.get_description = ggml_backend_simple_dev_get_description;
+        dev->base.iface.get_memory = ggml_backend_simple_dev_get_memory;
+        dev->base.iface.get_type = ggml_backend_simple_dev_get_type;
+        dev->base.iface.get_props = ggml_backend_simple_dev_get_props;
+        dev->base.iface.init_backend = ggml_backend_simple_dev_init_backend;
+        dev->base.iface.get_buffer_type = ggml_backend_simple_dev_get_buffer_type;
+        dev->base.iface.supports_op = ggml_backend_simple_dev_supports_op;
+        dev->base.iface.supports_buft = ggml_backend_simple_dev_supports_buft;
+        dev->base.iface.offload_op = ggml_backend_simple_dev_offload_op;
+        dev->base.reg = (ggml_backend_reg_t)reg;
+        dev->base.context = NULL;
+        snprintf(dev->name, sizeof(dev->name), "%s", ggml_backend_registry[i].name);
+        snprintf(dev->description, sizeof(dev->description), "%s backend", ggml_backend_registry[i].name);
+        dev->flat_backend_idx = i;
+
+        g_device_aware_reg_count++;
+        g_simple_device_count++;
+    }
+}
+
+// Device-aware registry functions
+size_t ggml_backend_reg_count(void) {
+    ggml_backend_device_aware_init();
+    return g_device_aware_reg_count + g_external_reg_count;
+}
+
+ggml_backend_reg_t ggml_backend_reg_get(size_t index) {
+    ggml_backend_device_aware_init();
+    GGML_ASSERT(index < g_device_aware_reg_count + g_external_reg_count);
+    if (index < g_device_aware_reg_count) {
+        return (ggml_backend_reg_t)&g_device_aware_regs[index].base;
+    }
+    return g_external_regs[index - g_device_aware_reg_count];
+}
+
+ggml_backend_reg_t ggml_backend_reg_by_name(const char * name) {
+    ggml_backend_device_aware_init();
+    for (size_t i = 0; i < g_device_aware_reg_count; i++) {
+        if (striequals(g_device_aware_regs[i].name, name)) {
+            return (ggml_backend_reg_t)&g_device_aware_regs[i].base;
+        }
+    }
+    for (size_t i = 0; i < g_external_reg_count; i++) {
+        const char * reg_name = g_external_regs[i]->iface.get_name(g_external_regs[i]);
+        if (striequals(reg_name, name)) {
+            return g_external_regs[i];
+        }
+    }
+    return NULL;
+}
+
+void ggml_backend_register_reg(ggml_backend_reg_t reg) {
+    GGML_ASSERT(g_external_reg_count < MAX_EXTERNAL_REGS);
+    g_external_regs[g_external_reg_count++] = reg;
+}
+
+// Device functions
+size_t ggml_backend_dev_count(void) {
+    ggml_backend_device_aware_init();
+    size_t count = g_simple_device_count;
+    // Add devices from external registries
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        count += g_external_regs[r]->iface.get_device_count(g_external_regs[r]);
+    }
+    return count;
+}
+
+ggml_backend_dev_t ggml_backend_dev_get(size_t index) {
+    ggml_backend_device_aware_init();
+    // First check simple devices
+    if (index < g_simple_device_count) {
+        return (ggml_backend_dev_t)&g_simple_devices[index].base;
+    }
+    // Then check external registries
+    size_t remaining = index - g_simple_device_count;
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        size_t dev_count = g_external_regs[r]->iface.get_device_count(g_external_regs[r]);
+        if (remaining < dev_count) {
+            return g_external_regs[r]->iface.get_device(g_external_regs[r], remaining);
+        }
+        remaining -= dev_count;
+    }
+    GGML_ASSERT(false && "device index out of range");
+    return NULL;
+}
+
+ggml_backend_dev_t ggml_backend_dev_by_name(const char * name) {
+    ggml_backend_device_aware_init();
+    // Check simple devices first
+    for (size_t i = 0; i < g_simple_device_count; i++) {
+        if (striequals(g_simple_devices[i].name, name)) {
+            return (ggml_backend_dev_t)&g_simple_devices[i].base;
+        }
+    }
+    // Check external registry devices
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        size_t dev_count = g_external_regs[r]->iface.get_device_count(g_external_regs[r]);
+        for (size_t d = 0; d < dev_count; d++) {
+            ggml_backend_dev_t dev = g_external_regs[r]->iface.get_device(g_external_regs[r], d);
+            if (striequals(dev->iface.get_name(dev), name)) {
+                return dev;
+            }
+        }
+    }
+    return NULL;
+}
+
+ggml_backend_dev_t ggml_backend_dev_by_type(enum ggml_backend_dev_type type) {
+    ggml_backend_device_aware_init();
+    // Check simple devices first
+    for (size_t i = 0; i < g_simple_device_count; i++) {
+        if (g_simple_devices[i].base.iface.get_type((ggml_backend_dev_t)&g_simple_devices[i].base) == type) {
+            return (ggml_backend_dev_t)&g_simple_devices[i].base;
+        }
+    }
+    // Check external registry devices
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        size_t dev_count = g_external_regs[r]->iface.get_device_count(g_external_regs[r]);
+        for (size_t d = 0; d < dev_count; d++) {
+            ggml_backend_dev_t dev = g_external_regs[r]->iface.get_device(g_external_regs[r], d);
+            if (dev->iface.get_type(dev) == type) {
+                return dev;
+            }
+        }
+    }
+    return NULL;
+}
+
+// Backend initialization convenience functions
+ggml_backend_t ggml_backend_init_by_name(const char * name, const char * params) {
+    ggml_backend_device_aware_init();
+    // Check simple registries
+    for (size_t i = 0; i < g_device_aware_reg_count; i++) {
+        if (striequals(g_device_aware_regs[i].name, name)) {
+            return ggml_backend_simple_dev_init_backend((ggml_backend_dev_t)&g_simple_devices[i].base, params);
+        }
+    }
+    // Check external registries
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        const char * reg_name = g_external_regs[r]->iface.get_name(g_external_regs[r]);
+        if (striequals(reg_name, name)) {
+            // Initialize the first device of this registry
+            ggml_backend_dev_t dev = g_external_regs[r]->iface.get_device(g_external_regs[r], 0);
+            return dev->iface.init_backend(dev, params);
+        }
+    }
+    return NULL;
+}
+
+ggml_backend_t ggml_backend_init_by_type(enum ggml_backend_dev_type type, const char * params) {
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(type);
+    if (dev == NULL) {
+        return NULL;
+    }
+    return dev->iface.init_backend(dev, params);
+}
+
+ggml_backend_t ggml_backend_init_best(void) {
+    // Try to initialize the best available backend
+    // For now, prefer CPU
+    ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu_dev != NULL) {
+        return cpu_dev->iface.init_backend(cpu_dev, NULL);
+    }
+    return NULL;
 }
 
 // backend CPU

@@ -8,8 +8,10 @@
 extern "C" {
 #endif
 
+    #define GGML_BACKEND_API_VERSION 2
+
     //
-    // Backend buffer
+    // Backend buffer type
     //
 
     // buffer type
@@ -31,6 +33,7 @@ extern "C" {
 
     struct ggml_backend_buffer_type {
         struct ggml_backend_buffer_type_i  iface;
+        ggml_backend_dev_t device;  // back-pointer to device
         ggml_backend_buffer_type_context_t context;
     };
 
@@ -138,6 +141,46 @@ extern "C" {
 
     struct ggml_backend_event {
         ggml_backend_t backend;
+        void * context;
+    };
+
+    //
+    // Backend device interface
+    //
+
+    struct ggml_backend_device_i {
+        const char * (*get_name)(ggml_backend_dev_t dev);
+        const char * (*get_description)(ggml_backend_dev_t dev);
+        void         (*get_memory)(ggml_backend_dev_t dev, size_t * free, size_t * total);
+        enum ggml_backend_dev_type (*get_type)(ggml_backend_dev_t dev);
+        void (*get_props)(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props);
+        ggml_backend_t (*init_backend)(ggml_backend_dev_t dev, const char * params);
+        ggml_backend_buffer_type_t (*get_buffer_type)(ggml_backend_dev_t dev);
+        bool (*supports_op)(ggml_backend_dev_t dev, const struct ggml_tensor * op);
+        bool (*supports_buft)(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft);
+        bool (*offload_op)(ggml_backend_dev_t dev, const struct ggml_tensor * op);
+    };
+
+    struct ggml_backend_device {
+        struct ggml_backend_device_i iface;
+        ggml_backend_reg_t reg;  // back-pointer to parent registry
+        void * context;
+    };
+
+    //
+    // Backend registry interface
+    //
+
+    struct ggml_backend_reg_i {
+        const char * (*get_name)(ggml_backend_reg_t reg);
+        size_t       (*get_device_count)(ggml_backend_reg_t reg);
+        ggml_backend_dev_t (*get_device)(ggml_backend_reg_t reg, size_t index);
+        void * (*get_proc_address)(ggml_backend_reg_t reg, const char * name);
+    };
+
+    struct ggml_backend_reg {
+        int api_version;  // GGML_BACKEND_API_VERSION
+        struct ggml_backend_reg_i iface;
         void * context;
     };
 

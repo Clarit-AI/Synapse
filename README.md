@@ -7,8 +7,8 @@
 This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance, new SOTA quantization types, first-class Bitnet support, better DeepSeek performance via MLA, FlashMLA, fused MoE operations and tensor overrides for hybrid GPU/CPU inference, row-interleaved quant packing, etc.
 
 >[!NOTE]
->The only fully functional and performant compute backends are CPU (`AVX2` or better, `ARM_NEON` or better) and CUDA.
->Please do not enter issues related to ROCm, Vulkan, Metal, etc. They will not get resolved unless you roll up your sleeves and help bring your favorite backend up to speed. With the current regular contributors this project simply does not have the bandwidth to work on all backends available in `llama.cpp`.
+>The only fully functional and performant compute backends are CPU (`AVX2` or better, `ARM_NEON` or better), CUDA, and **Rockchip NPU** (via RKNPU2).
+>Metal support is functional but may have issues. Please do not enter issues related to ROCm, Vulkan, etc. They will not get resolved unless you roll up your sleeves and help bring your favorite backend up to speed.
  
 >[!IMPORTANT]
 >Do not use quantized models from Unsloth that have `_XL` in their name. These are likely to not work with `ik_llama.cpp`.
@@ -51,6 +51,24 @@ cmake -B build -DGGML_NATIVE=ON -DGGML_CUDA=ON
 
 cmake --build build --config Release -j$(nproc)
 ```
+
+### Build for Rockchip NPU
+
+On a Rockchip RK3588/RK3576 board (or cross-compile), install the RKNN runtime:
+
+```bash
+sudo apt-get install librknpu2-rk3588  # For RK3588/RK3576
+```
+
+Then build with RKNPU2 support:
+
+```bash
+cmake -B build -DGGML_NATIVE=ON -DGGML_RKNPU2=ON -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --config Release -j$(nproc)
+```
+
+For details, see [RKNPU2 Backend Documentation](./docs/backend/RKNPU2.md).
 ### Step-by-step instructions for a case of a successful Windows build
 https://github.com/ikawrakow/ik_llama.cpp/blob/main/docs/build.md
 
@@ -74,6 +92,8 @@ That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser start
 ### [Step by step guide](./docker/README.md) for ik_llama.cpp in podman/docker container including llama-swap
 
 ### [Common parameters and options](./docs/parameters.md)
+
+### [Rockchip NPU / RKNPU2 Backend](./docs/npu/README.md) - Neural Processing Unit acceleration for RK3588/RK3576
 
 ## Latest News
 
@@ -125,6 +145,7 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 
 ### Features
 
+* **Rockchip NPU Support**: RKNPU2 backend for acceleration on Rockchip RK3588, RK3588S, and RK3576 NPUs. See [RKNPU2 Documentation](./docs/backend/RKNPU2.md) for details.
 * New split mode "graph" for multi GPU setups [PR 1022](https://github.com/ikawrakow/ik_llama.cpp/pull/1022)
 * Fused delta-net for Qwen3-Next and Qwen3.5-MoE [PR 1315](https://github.com/ikawrakow/ik_llama.cpp/pull/1315) [PR 1333](https://github.com/ikawrakow/ik_llama.cpp/pull/1333) [PR 1362](https://github.com/ikawrakow/ik_llama.cpp/pull/1362) [PR 1373](https://github.com/ikawrakow/ik_llama.cpp/pull/1373)
 * Checkpoints for recurrent models [PR 1310](https://github.com/ikawrakow/ik_llama.cpp/pull/1310) [PR 1398](https://github.com/ikawrakow/ik_llama.cpp/pull/1398)

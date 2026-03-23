@@ -158,6 +158,7 @@ option(GGML_VULKAN_NO_INT_DOT               "ggml: don't use Vulkan integer dot 
 option(GGML_KOMPUTE                         "ggml: use Kompute"                               OFF)
 option(GGML_METAL                           "ggml: use Metal"                                 ${GGML_METAL_DEFAULT})
 option(GGML_METAL_NDEBUG                    "ggml: disable Metal debugging"                   OFF)
+option(GGML_RKNPU2                          "ggml: use RKNPU2"                               OFF)
 option(GGML_METAL_SHADER_DEBUG              "ggml: compile Metal with -fno-fast-math"         OFF)
 option(GGML_METAL_EMBED_LIBRARY             "ggml: embed Metal library"                       ${GGML_METAL})
 set   (GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING

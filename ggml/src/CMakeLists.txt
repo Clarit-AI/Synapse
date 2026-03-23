@@ -479,6 +479,42 @@ if (GGML_CUDA)
     endif()
 endif()
 
+if (GGML_RKNPU2)
+    if (ANDROID OR UNIX AND NOT APPLE)
+        # RKNPU2 backend requires Linux and Rockchip NPU SDK
+        set(GGML_SOURCES_RKNPU2
+            ggml-rknpu2-adapter.cpp
+            ggml-rknpu2/ggml-rknpu2.cpp
+            ggml-rknpu2/rknpu2-allocation.cpp
+            ggml-rknpu2/rknpu2-quantization.cpp
+            ggml-rknpu2/rknpu2-calibration.cpp
+            ggml-rknpu2/rknpu2-configuration.cpp
+        )
+
+        set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES}
+            ${CMAKE_CURRENT_SOURCE_DIR}/ggml-rknpu2
+            ${CMAKE_CURRENT_SOURCE_DIR}/ggml-rknpu2/libs/include
+        )
+
+        set(GGML_EXTRA_LIBDIRS ${GGML_EXTRA_LIBDIRS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/ggml-rknpu2/libs
+        )
+
+        find_package(OpenMP)
+        if (OpenMP_FOUND)
+            add_compile_definitions(HAVE_OPENMP=1)
+            list(APPEND CMAKE_CXX_FLAGS "${OpenMP_CXX_FLAGS}")
+        else()
+            message(WARNING "OpenMP not found - RKNPU2 will build without multi-threading optimizations")
+        endif()
+
+        list(APPEND GGML_CDEF_PUBLIC GGML_USE_RKNPU2)
+    else()
+        message(WARNING "RKNPU2 backend is only supported on Linux (Android/Unix). Skipping RKNPU2 build on ${CMAKE_SYSTEM_NAME}")
+        set(GGML_SOURCES_RKNPU2 "")
+    endif()
+endif()
+
 if (GGML_HIPBLAS)
     if (NOT EXISTS $ENV{ROCM_PATH})
         if (NOT EXISTS /opt/rocm)
@@ -593,7 +629,7 @@ if (GGML_SYCL)
         message(FATAL_ERROR "Invalid backend chosen, supported options are INTEL or NVIDIA")
     endif()
 
-    check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
+    check_cxx_compiler_flag(-fsycl SUPPORTS_SYCL)
     if ( DEFINED ENV{ONEAPI_ROOT})
         message(STATUS "Using oneAPI Release SYCL compiler (icpx).")
     elseif(SUPPORTS_SYCL)
@@ -901,8 +937,6 @@ if (GGML_KOMPUTE)
                     COMMAND ${CMAKE_COMMAND} -E echo "/*THIS FILE HAS BEEN AUTOMATICALLY GENERATED - DO NOT EDIT*/" > ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_COMMAND} -E echo \"\#ifndef ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_COMMAND} -E echo \"\#define ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
-                    COMMAND ${CMAKE_COMMAND} -E echo "namespace kp {" >> ${OUTPUT_HEADER_FILE}
-                    COMMAND ${CMAKE_COMMAND} -E echo "namespace shader_data {" >> ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_BINARY_DIR}/bin/$<CONFIG>/xxd -i ${RAW_FILE_NAME} >> ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_COMMAND} -E echo "}}" >> ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_COMMAND} -E echo \"\#endif // define ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
@@ -1015,7 +1049,7 @@ if (GGML_KOMPUTE)
         set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS}     kompute)
         set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
     else()
-        message(WARNING "Kompute not found")
+        message(WARNING " Kompute not found")
     endif()
 endif()
 
@@ -1113,7 +1147,7 @@ function(get_flags CCID CCVER)
 
         if (NOT GGML_MUSA)
             if (CCVER VERSION_GREATER_EQUAL 7.1.0)
-                list(APPEND CXX_FLAGS -Wno-format-truncation)
+                list(APPEND WARNING_FLAGS -Wno-format-truncation)
             endif()
         endif()
         if (CCVER VERSION_GREATER_EQUAL 8.1.0)
@@ -1529,6 +1563,7 @@ add_library(ggml
             ${GGML_SOURCES_IQK_MM}    ${GGML_HEADERS_IQK_MM}
             ${GGML_SOURCES_IQK}       ${GGML_HEADERS_IQK}
             ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
+            ${GGML_SOURCES_RKNPU2}
             ggml-aarch64.c            ggml-aarch64.h
             )
 
