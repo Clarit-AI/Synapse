@@ -102,20 +102,20 @@ if (GGML_METAL)
             # note: adding -fno-inline fixes the tests when using MTL_SHADER_VALIDATION=1
             # note: unfortunately, we have to call it default.metallib instead of ggml.metallib
             #       ref: https://github.com/ggerganov/whisper.cpp/issues/1720
-            set(XC_FLAGS -fno-fast-math -fno-inline -g)
+            list(APPEND XC_FLAGS -fno-fast-math -fno-inline -g)
         else()
-            set(XC_FLAGS -O3)
+            list(APPEND XC_FLAGS -O3)
         endif()
 
         # Append macOS metal versioning flags
         if (GGML_METAL_MACOSX_VERSION_MIN)
             message(STATUS "Adding  -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN} flag to metal compilation")
-            string(APPEND XC_FLAGS " -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN}")
+            list(APPEND XC_FLAGS -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN})
         endif()
 
         if (GGML_METAL_STD)
             message(STATUS "Adding  -std=${GGML_METAL_STD} flag to metal compilation")
-            string(APPEND XC_FLAGS " -std=${GGML_METAL_STD}")
+            list(APPEND XC_FLAGS -std=${GGML_METAL_STD})
         endif()
 
         add_custom_command(
@@ -480,7 +480,7 @@ if (GGML_CUDA)
 endif()
 
 if (GGML_RKNPU2)
-    if (ANDROID OR UNIX AND NOT APPLE)
+    if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # RKNPU2 backend requires Linux and Rockchip NPU SDK
         set(GGML_SOURCES_RKNPU2
             ggml-rknpu2-adapter.cpp
@@ -510,7 +510,7 @@ if (GGML_RKNPU2)
 
         list(APPEND GGML_CDEF_PUBLIC GGML_USE_RKNPU2)
     else()
-        message(WARNING "RKNPU2 backend is only supported on Linux (Android/Unix). Skipping RKNPU2 build on ${CMAKE_SYSTEM_NAME}")
+        message(WARNING "RKNPU2 backend is only supported on Linux/Android. Skipping RKNPU2 build on ${CMAKE_SYSTEM_NAME}")
         set(GGML_SOURCES_RKNPU2 "")
     endif()
 endif()
@@ -1147,7 +1147,7 @@ function(get_flags CCID CCVER)
 
         if (NOT GGML_MUSA)
             if (CCVER VERSION_GREATER_EQUAL 7.1.0)
-                list(APPEND WARNING_FLAGS -Wno-format-truncation)
+                list(APPEND C_FLAGS -Wno-format-truncation)
             endif()
         endif()
         if (CCVER VERSION_GREATER_EQUAL 8.1.0)
