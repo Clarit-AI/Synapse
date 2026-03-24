@@ -102,20 +102,20 @@ if (GGML_METAL)
             # note: adding -fno-inline fixes the tests when using MTL_SHADER_VALIDATION=1
             # note: unfortunately, we have to call it default.metallib instead of ggml.metallib
             #       ref: https://github.com/ggerganov/whisper.cpp/issues/1720
-            set(XC_FLAGS -fno-fast-math -fno-inline -g)
+            list(APPEND XC_FLAGS -fno-fast-math -fno-inline -g)
         else()
-            set(XC_FLAGS -O3)
+            list(APPEND XC_FLAGS -O3)
         endif()
 
         # Append macOS metal versioning flags
         if (GGML_METAL_MACOSX_VERSION_MIN)
             message(STATUS "Adding  -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN} flag to metal compilation")
-            list   (APPEND XC_FLAGS -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN})
+            list(APPEND XC_FLAGS -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN})
         endif()
 
         if (GGML_METAL_STD)
             message(STATUS "Adding  -std=${GGML_METAL_STD} flag to metal compilation")
-            list   (APPEND XC_FLAGS -std=${GGML_METAL_STD})
+            list(APPEND XC_FLAGS -std=${GGML_METAL_STD})
         endif()
 
         add_custom_command(
@@ -479,6 +479,42 @@ if (GGML_CUDA)
     endif()
 endif()
 
+if (GGML_RKNPU2)
+    if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # RKNPU2 backend requires Linux and Rockchip NPU SDK
+        set(GGML_SOURCES_RKNPU2
+            ggml-rknpu2-adapter.cpp
+            ggml-rknpu2/ggml-rknpu2.cpp
+            ggml-rknpu2/rknpu2-allocation.cpp
+            ggml-rknpu2/rknpu2-quantization.cpp
+            ggml-rknpu2/rknpu2-calibration.cpp
+            ggml-rknpu2/rknpu2-configuration.cpp
+        )
+
+        set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES}
+            ${CMAKE_CURRENT_SOURCE_DIR}/ggml-rknpu2
+            ${CMAKE_CURRENT_SOURCE_DIR}/ggml-rknpu2/libs/include
+        )
+
+        set(GGML_EXTRA_LIBDIRS ${GGML_EXTRA_LIBDIRS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/ggml-rknpu2/libs
+        )
+
+        find_package(OpenMP)
+        if (OpenMP_FOUND)
+            add_compile_definitions(HAVE_OPENMP=1)
+            string(APPEND CMAKE_CXX_FLAGS " ${OpenMP_CXX_FLAGS}")
+        else()
+            message(WARNING "OpenMP not found - RKNPU2 will build without multi-threading optimizations")
+        endif()
+
+        list(APPEND GGML_CDEF_PUBLIC GGML_USE_RKNPU2)
+    else()
+        message(WARNING "RKNPU2 backend is only supported on Linux/Android. Skipping RKNPU2 build on ${CMAKE_SYSTEM_NAME}")
+        set(GGML_SOURCES_RKNPU2 "")
+    endif()
+endif()
+
 if (GGML_HIPBLAS)
     if (NOT EXISTS $ENV{ROCM_PATH})
         if (NOT EXISTS /opt/rocm)
@@ -593,7 +629,7 @@ if (GGML_SYCL)
         message(FATAL_ERROR "Invalid backend chosen, supported options are INTEL or NVIDIA")
     endif()
 
-    check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
+    check_cxx_compiler_flag(-fsycl SUPPORTS_SYCL)
     if ( DEFINED ENV{ONEAPI_ROOT})
         message(STATUS "Using oneAPI Release SYCL compiler (icpx).")
     elseif(SUPPORTS_SYCL)
@@ -901,8 +937,6 @@ if (GGML_KOMPUTE)
                     COMMAND ${CMAKE_COMMAND} -E echo "/*THIS FILE HAS BEEN AUTOMATICALLY GENERATED - DO NOT EDIT*/" > ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_COMMAND} -E echo \"\#ifndef ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_COMMAND} -E echo \"\#define ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
-                    COMMAND ${CMAKE_COMMAND} -E echo "namespace kp {" >> ${OUTPUT_HEADER_FILE}
-                    COMMAND ${CMAKE_COMMAND} -E echo "namespace shader_data {" >> ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_BINARY_DIR}/bin/$<CONFIG>/xxd -i ${RAW_FILE_NAME} >> ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_COMMAND} -E echo "}}" >> ${OUTPUT_HEADER_FILE}
                     COMMAND ${CMAKE_COMMAND} -E echo \"\#endif // define ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
@@ -1015,7 +1049,7 @@ if (GGML_KOMPUTE)
         set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS}     kompute)
         set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
     else()
-        message(WARNING "Kompute not found")
+        message(WARNING " Kompute not found")
     endif()
 endif()
 
@@ -1113,7 +1147,7 @@ function(get_flags CCID CCVER)
 
         if (NOT GGML_MUSA)
             if (CCVER VERSION_GREATER_EQUAL 7.1.0)
-                list(APPEND CXX_FLAGS -Wno-format-truncation)
+                list(APPEND C_FLAGS -Wno-format-truncation)
             endif()
         endif()
         if (CCVER VERSION_GREATER_EQUAL 8.1.0)
@@ -1339,6 +1373,9 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
             # else we fail on Gravitons and such
             list(APPEND ARCH_FLAGS -flax-vector-conversions)
         endif()
+        if (GGML_NATIVE)
+            list(APPEND ARCH_FLAGS -march=native)
+        endif()
     endif()
 elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LWR MATCHES "^(x86_64|i686|amd64|x64|win32)$" OR
         (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM_LWR AND
@@ -1430,7 +1467,7 @@ add_compile_options("$<$<COMPILE_LANGUAGE:C>:${ARCH_FLAGS}>")
 
 if (GGML_CUDA)
     list(APPEND CUDA_CXX_FLAGS ${ARCH_FLAGS})
-    list(JOIN   CUDA_CXX_FLAGS " " CUDA_CXX_FLAGS_JOINED)  # pass host compiler flags as a single argument
+    string(APPEND CUDA_CXX_FLAGS " " ${CUDA_CXX_FLAGS_JOINED})  # pass host compiler flags as a single argument
 
     if (NOT CUDA_CXX_FLAGS_JOINED STREQUAL "")
         list(APPEND CUDA_FLAGS -Xcompiler ${CUDA_CXX_FLAGS_JOINED})
@@ -1529,6 +1566,7 @@ add_library(ggml
             ${GGML_SOURCES_IQK_MM}    ${GGML_HEADERS_IQK_MM}
             ${GGML_SOURCES_IQK}       ${GGML_HEADERS_IQK}
             ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
+            ${GGML_SOURCES_RKNPU2}
             ggml-aarch64.c            ggml-aarch64.h
             )
 

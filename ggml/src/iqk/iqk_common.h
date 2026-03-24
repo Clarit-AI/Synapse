@@ -923,6 +923,8 @@ static IQK_ALWAYS_INLINE void prepare_iq4_nl_quants_r8(const int8x16_t& values, 
 
 #endif
 
+#include <cstdint>
+
 // static unrool for:
 template<int N, typename T> 
 inline void static_for(T&&f) {

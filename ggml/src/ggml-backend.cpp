@@ -440,15 +440,39 @@ void ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event)
 
 #define GGML_REG_MAX_BACKENDS 64
 
-struct ggml_backend_reg {
+// Flat registry entry - internal use only
+// NOTE: This is distinct from the device-aware ggml_backend_reg in ggml-backend-impl.h
+struct ggml_backend_registry_entry {
     char name[128];
     ggml_backend_init_fn init_fn;
     ggml_backend_buffer_type_t default_buffer_type;
     void * user_data;
+    enum ggml_backend_dev_type device_type;  // Device type for simple backends
 };
 
-static struct ggml_backend_reg ggml_backend_registry[GGML_REG_MAX_BACKENDS];
+static struct ggml_backend_registry_entry ggml_backend_registry[GGML_REG_MAX_BACKENDS];
 static size_t ggml_backend_registry_count = 0;
+
+// Forward declarations for device-aware registry (defined later)
+#define MAX_DEVICE_AWARE_REGS 16
+#define MAX_EXTERNAL_REGS 8
+static struct ggml_backend_simple_reg {
+    struct ggml_backend_reg base;
+    char name[128];
+    size_t flat_backend_idx;
+};
+static struct ggml_backend_simple_device {
+    struct ggml_backend_device base;
+    char name[64];
+    char description[128];
+    size_t flat_backend_idx;
+};
+static struct ggml_backend_simple_reg g_device_aware_regs[MAX_DEVICE_AWARE_REGS];
+static size_t g_device_aware_reg_count;
+static struct ggml_backend_simple_device g_simple_devices[MAX_DEVICE_AWARE_REGS];
+static size_t g_simple_device_count;
+static ggml_backend_reg_t g_external_regs[MAX_EXTERNAL_REGS];
+static size_t g_external_reg_count;
 
 GGML_CALL static ggml_backend_t ggml_backend_reg_cpu_init(const char * params, void * user_data);
 
@@ -474,6 +498,9 @@ extern "C" GGML_CALL int ggml_backend_cann_reg_devices(void);
 #ifdef GGML_USE_RPC
 extern "C" GGML_CALL void ggml_backend_rpc_reg_devices(void);
 #endif
+#ifdef GGML_USE_RKNPU2
+extern "C" GGML_CALL int ggml_backend_rknpu_reg_devices(void);
+#endif
 
 GGML_CALL static void ggml_backend_registry_init(void) {
     static bool initialized = false;
@@ -484,7 +511,7 @@ GGML_CALL static void ggml_backend_registry_init(void) {
 
     initialized = true;
 
-    ggml_backend_register("CPU", ggml_backend_reg_cpu_init, ggml_backend_cpu_buffer_type(), NULL);
+    ggml_backend_register("CPU", ggml_backend_reg_cpu_init, ggml_backend_cpu_buffer_type(), NULL, GGML_BACKEND_DEVICE_TYPE_CPU);
 
     // add forward decls here to avoid including the backend headers
 #ifdef GGML_USE_CUDA
@@ -496,7 +523,7 @@ GGML_CALL static void ggml_backend_registry_init(void) {
 #endif
 
 #ifdef GGML_USE_METAL
-    ggml_backend_register("Metal", ggml_backend_reg_metal_init, ggml_backend_metal_buffer_type(), NULL);
+    ggml_backend_register("Metal", ggml_backend_reg_metal_init, ggml_backend_metal_buffer_type(), NULL, GGML_BACKEND_DEVICE_TYPE_GPU);
 #endif
 
 #ifdef GGML_USE_VULKAN
@@ -513,18 +540,22 @@ GGML_CALL static void ggml_backend_registry_init(void) {
 #ifdef GGML_USE_RPC
     ggml_backend_rpc_reg_devices();
 #endif
+#ifdef GGML_USE_RKNPU2
+    ggml_backend_rknpu_reg_devices();
+#endif
 }
 
-GGML_CALL void ggml_backend_register(const char * name, ggml_backend_init_fn init_fn, ggml_backend_buffer_type_t default_buffer_type, void * user_data) {
+GGML_CALL void ggml_backend_register(const char * name, ggml_backend_init_fn init_fn, ggml_backend_buffer_type_t default_buffer_type, void * user_data, enum ggml_backend_dev_type device_type) {
     GGML_ASSERT(ggml_backend_registry_count < GGML_REG_MAX_BACKENDS);
 
     size_t id = ggml_backend_registry_count;
 
-    ggml_backend_registry[id] = ggml_backend_reg {
+    ggml_backend_registry[id] = ggml_backend_registry_entry {
         /* .name                = */ {0},
-        /* .fn                  = */ init_fn,
+        /* .init_fn             = */ init_fn,
         /* .default_buffer_type = */ default_buffer_type,
-        /* .user_data           = */ user_data
+        /* .user_data           = */ user_data,
+        /* .device_type         = */ device_type
     };
 
     snprintf(ggml_backend_registry[id].name, sizeof(ggml_backend_registry[id].name), "%s", name);
@@ -616,6 +647,356 @@ ggml_backend_buffer_t ggml_backend_reg_alloc_buffer(size_t i, size_t size) {
 
     GGML_ASSERT(i < ggml_backend_registry_count);
     return ggml_backend_buft_alloc_buffer(ggml_backend_registry[i].default_buffer_type, size);
+}
+
+//
+// Device-aware registry layer
+// Wraps flat registry entries into device-aware format for multi-device support
+//
+
+// Adapter for flat backends (CPU, Metal) to device-aware API
+struct ggml_backend_dev_adapter {
+    ggml_backend_dev_t dev;  // the wrapped device
+    size_t flat_backend_idx; // index into flat registry
+};
+
+// Device wrapper for simple backends (CPU, Metal, etc.)
+// (struct moved earlier as forward declaration to resolve C++ ordering)
+
+// Registry wrapper for simple backends
+// (struct moved earlier as forward declaration to resolve C++ ordering)
+
+// Get device count for simple backend registry
+static size_t ggml_backend_simple_reg_get_device_count(ggml_backend_reg_t reg) {
+    GGML_UNUSED(reg);
+    return 1; // CPU has 1 device
+}
+
+// Get device for simple backend registry
+static ggml_backend_dev_t ggml_backend_simple_reg_get_device(ggml_backend_reg_t reg, size_t index) {
+    GGML_UNUSED(index);
+    GGML_ASSERT(index == 0); // CPU has only 1 device
+    struct ggml_backend_simple_reg * simple_reg = (struct ggml_backend_simple_reg *)reg;
+    // Find the device index by looking up the registry
+    // The registry context stores the device index
+    size_t dev_idx = (size_t)simple_reg->base.context;
+    GGML_ASSERT(dev_idx < g_simple_device_count);
+    return (ggml_backend_dev_t)&g_simple_devices[dev_idx].base;
+}
+
+// Get name for simple backend registry
+static const char * ggml_backend_simple_reg_get_name(ggml_backend_reg_t reg) {
+    struct ggml_backend_simple_reg * simple_reg = (struct ggml_backend_simple_reg *)reg;
+    return simple_reg->name;
+}
+
+// Get proc address (not used for simple backends)
+static void * ggml_backend_simple_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    GGML_UNUSED(reg);
+    GGML_UNUSED(name);
+    return NULL;
+}
+
+// Simple backend device interface functions
+static const char * ggml_backend_simple_dev_get_name(ggml_backend_dev_t dev) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    return simple_dev->name;
+}
+
+static const char * ggml_backend_simple_dev_get_description(ggml_backend_dev_t dev) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    return simple_dev->description;
+}
+
+static void ggml_backend_simple_dev_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+    GGML_UNUSED(dev);
+    // Report system memory for CPU
+    // TODO: implement proper memory detection
+    *free = 0;
+    *total = 0;
+}
+
+static enum ggml_backend_dev_type ggml_backend_simple_dev_get_type(ggml_backend_dev_t dev) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    ggml_backend_registry_init();
+    return ggml_backend_registry[simple_dev->flat_backend_idx].device_type;
+}
+
+static void ggml_backend_simple_dev_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    ggml_backend_registry_init();
+    props->name = simple_dev->name;
+    props->description = simple_dev->description;
+    props->memory_free = 0;
+    props->memory_total = 0;
+    props->type = ggml_backend_registry[simple_dev->flat_backend_idx].device_type;
+    props->device_id = "";
+}
+
+static ggml_backend_t ggml_backend_simple_dev_init_backend(ggml_backend_dev_t dev, const char * params) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    ggml_backend_registry_init();
+    return ggml_backend_registry[simple_dev->flat_backend_idx].init_fn(params, ggml_backend_registry[simple_dev->flat_backend_idx].user_data);
+}
+
+static ggml_backend_buffer_type_t ggml_backend_simple_dev_get_buffer_type(ggml_backend_dev_t dev) {
+    struct ggml_backend_simple_device * simple_dev = (struct ggml_backend_simple_device *)dev;
+    ggml_backend_registry_init();
+    return ggml_backend_registry[simple_dev->flat_backend_idx].default_buffer_type;
+}
+
+static bool ggml_backend_simple_dev_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    GGML_UNUSED(dev);
+    // For CPU, delegate to the backend's supports_op
+    // This is a simplified implementation
+    return true;
+}
+
+static bool ggml_backend_simple_dev_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(dev);
+    GGML_UNUSED(buft);
+    return true;
+}
+
+static bool ggml_backend_simple_dev_offload_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    GGML_UNUSED(dev);
+    GGML_UNUSED(op);
+    return false;
+}
+
+// Global storage for device-aware registries and devices
+// (declarations moved earlier to resolve C++ ordering requirements)
+
+// Initialize device-aware layer from flat registry
+static void ggml_backend_device_aware_init(void) {
+    static bool initialized = false;
+    if (initialized) {
+        return;
+    }
+    initialized = true;
+
+    ggml_backend_registry_init();
+
+    // Wrap each flat backend as a device-aware registry with 1 device
+    for (size_t i = 0; i < ggml_backend_registry_count && g_device_aware_reg_count < MAX_DEVICE_AWARE_REGS; i++) {
+        struct ggml_backend_simple_reg * reg = &g_device_aware_regs[g_device_aware_reg_count];
+        struct ggml_backend_simple_device * dev = &g_simple_devices[g_device_aware_reg_count];
+
+        // Initialize registry interface
+        reg->base.api_version = GGML_BACKEND_API_VERSION;
+        reg->base.iface.get_name = ggml_backend_simple_reg_get_name;
+        reg->base.iface.get_device_count = ggml_backend_simple_reg_get_device_count;
+        reg->base.iface.get_device = ggml_backend_simple_reg_get_device;
+        reg->base.iface.get_proc_address = ggml_backend_simple_reg_get_proc_address;
+        reg->base.context = (void *)g_device_aware_reg_count; // device index stored in context
+        snprintf(reg->name, sizeof(reg->name), "%s", ggml_backend_registry[i].name);
+        reg->flat_backend_idx = i;
+
+        // Initialize device interface
+        dev->base.iface.get_name = ggml_backend_simple_dev_get_name;
+        dev->base.iface.get_description = ggml_backend_simple_dev_get_description;
+        dev->base.iface.get_memory = ggml_backend_simple_dev_get_memory;
+        dev->base.iface.get_type = ggml_backend_simple_dev_get_type;
+        dev->base.iface.get_props = ggml_backend_simple_dev_get_props;
+        dev->base.iface.init_backend = ggml_backend_simple_dev_init_backend;
+        dev->base.iface.get_buffer_type = ggml_backend_simple_dev_get_buffer_type;
+        dev->base.iface.supports_op = ggml_backend_simple_dev_supports_op;
+        dev->base.iface.supports_buft = ggml_backend_simple_dev_supports_buft;
+        dev->base.iface.offload_op = ggml_backend_simple_dev_offload_op;
+        dev->base.reg = (ggml_backend_reg_t)reg;
+        dev->base.context = NULL;
+        snprintf(dev->name, sizeof(dev->name), "%s", ggml_backend_registry[i].name);
+        snprintf(dev->description, sizeof(dev->description), "%s backend", ggml_backend_registry[i].name);
+        dev->flat_backend_idx = i;
+
+        g_device_aware_reg_count++;
+        g_simple_device_count++;
+    }
+}
+
+// Device-aware registry functions
+size_t ggml_backend_reg_count(void) {
+    ggml_backend_device_aware_init();
+    return g_device_aware_reg_count + g_external_reg_count;
+}
+
+ggml_backend_reg_t ggml_backend_reg_get(size_t index) {
+    ggml_backend_device_aware_init();
+    GGML_ASSERT(index < g_device_aware_reg_count + g_external_reg_count);
+    if (index < g_device_aware_reg_count) {
+        return (ggml_backend_reg_t)&g_device_aware_regs[index].base;
+    }
+    return g_external_regs[index - g_device_aware_reg_count];
+}
+
+ggml_backend_reg_t ggml_backend_reg_by_name(const char * name) {
+    ggml_backend_device_aware_init();
+    for (size_t i = 0; i < g_device_aware_reg_count; i++) {
+        if (striequals(g_device_aware_regs[i].name, name)) {
+            return (ggml_backend_reg_t)&g_device_aware_regs[i].base;
+        }
+    }
+    for (size_t i = 0; i < g_external_reg_count; i++) {
+        const char * reg_name = g_external_regs[i]->iface.get_name(g_external_regs[i]);
+        if (striequals(reg_name, name)) {
+            return g_external_regs[i];
+        }
+    }
+    return NULL;
+}
+
+void ggml_backend_register_reg(ggml_backend_reg_t reg) {
+    GGML_ASSERT(g_external_reg_count < MAX_EXTERNAL_REGS);
+    g_external_regs[g_external_reg_count++] = reg;
+}
+
+// Device functions
+size_t ggml_backend_dev_count(void) {
+    ggml_backend_device_aware_init();
+    size_t count = g_simple_device_count;
+    // Add devices from external registries
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        count += g_external_regs[r]->iface.get_device_count(g_external_regs[r]);
+    }
+    return count;
+}
+
+ggml_backend_dev_t ggml_backend_dev_get(size_t index) {
+    ggml_backend_device_aware_init();
+    // First check simple devices
+    if (index < g_simple_device_count) {
+        return (ggml_backend_dev_t)&g_simple_devices[index].base;
+    }
+    // Then check external registries
+    size_t remaining = index - g_simple_device_count;
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        size_t dev_count = g_external_regs[r]->iface.get_device_count(g_external_regs[r]);
+        if (remaining < dev_count) {
+            return g_external_regs[r]->iface.get_device(g_external_regs[r], remaining);
+        }
+        remaining -= dev_count;
+    }
+    GGML_ASSERT(false && "device index out of range");
+    return NULL;
+}
+
+ggml_backend_dev_t ggml_backend_dev_by_name(const char * name) {
+    ggml_backend_device_aware_init();
+    // Check simple devices first
+    for (size_t i = 0; i < g_simple_device_count; i++) {
+        if (striequals(g_simple_devices[i].name, name)) {
+            return (ggml_backend_dev_t)&g_simple_devices[i].base;
+        }
+    }
+    // Check external registry devices
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        size_t dev_count = g_external_regs[r]->iface.get_device_count(g_external_regs[r]);
+        for (size_t d = 0; d < dev_count; d++) {
+            ggml_backend_dev_t dev = g_external_regs[r]->iface.get_device(g_external_regs[r], d);
+            if (striequals(dev->iface.get_name(dev), name)) {
+                return dev;
+            }
+        }
+    }
+    return NULL;
+}
+
+ggml_backend_dev_t ggml_backend_dev_by_type(enum ggml_backend_dev_type type) {
+    ggml_backend_device_aware_init();
+    // Check simple devices first
+    for (size_t i = 0; i < g_simple_device_count; i++) {
+        if (g_simple_devices[i].base.iface.get_type((ggml_backend_dev_t)&g_simple_devices[i].base) == type) {
+            return (ggml_backend_dev_t)&g_simple_devices[i].base;
+        }
+    }
+    // Check external registry devices
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        size_t dev_count = g_external_regs[r]->iface.get_device_count(g_external_regs[r]);
+        for (size_t d = 0; d < dev_count; d++) {
+            ggml_backend_dev_t dev = g_external_regs[r]->iface.get_device(g_external_regs[r], d);
+            if (dev->iface.get_type(dev) == type) {
+                return dev;
+            }
+        }
+    }
+    return NULL;
+}
+
+void ggml_backend_dev_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
+    GGML_ASSERT(dev != NULL && props != NULL);
+    dev->iface.get_props(dev, props);
+}
+
+size_t ggml_backend_reg_dev_count(ggml_backend_reg_t reg) {
+    GGML_ASSERT(reg != NULL);
+    return reg->iface.get_device_count(reg);
+}
+
+ggml_backend_dev_t ggml_backend_reg_dev_get(ggml_backend_reg_t reg, size_t index) {
+    GGML_ASSERT(reg != NULL);
+    return reg->iface.get_device(reg, index);
+}
+
+// Backend initialization convenience functions
+ggml_backend_t ggml_backend_init_by_name(const char * name, const char * params) {
+    ggml_backend_device_aware_init();
+    // Check simple registries
+    for (size_t i = 0; i < g_device_aware_reg_count; i++) {
+        if (striequals(g_device_aware_regs[i].name, name)) {
+            return ggml_backend_simple_dev_init_backend((ggml_backend_dev_t)&g_simple_devices[i].base, params);
+        }
+    }
+    // Check external registries
+    for (size_t r = 0; r < g_external_reg_count; r++) {
+        const char * reg_name = g_external_regs[r]->iface.get_name(g_external_regs[r]);
+        if (striequals(reg_name, name)) {
+            // Initialize the first device of this registry
+            ggml_backend_dev_t dev = g_external_regs[r]->iface.get_device(g_external_regs[r], 0);
+            return dev->iface.init_backend(dev, params);
+        }
+    }
+    return NULL;
+}
+
+ggml_backend_t ggml_backend_init_by_type(enum ggml_backend_dev_type type, const char * params) {
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(type);
+    if (dev == NULL) {
+        return NULL;
+    }
+    return dev->iface.init_backend(dev, params);
+}
+
+ggml_backend_t ggml_backend_init_from_dev(ggml_backend_dev_t dev, const char * params) {
+    if (dev == NULL) {
+        return NULL;
+    }
+    return dev->iface.init_backend(dev, params);
+}
+
+ggml_backend_t ggml_backend_init_best(void) {
+    // Try to initialize the best available backend
+    // Prefer GPU > Accelerator > CPU, return first available
+    ggml_backend_dev_t best_dev = NULL;
+
+    // Try GPU first
+    ggml_backend_dev_t gpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    if (gpu_dev != NULL) {
+        return gpu_dev->iface.init_backend(gpu_dev, NULL);
+    }
+
+    // Try accelerator (e.g., NPU)
+    ggml_backend_dev_t accel_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_ACCEL);
+    if (accel_dev != NULL) {
+        return accel_dev->iface.init_backend(accel_dev, NULL);
+    }
+
+    // Fall back to CPU
+    ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu_dev != NULL) {
+        return cpu_dev->iface.init_backend(cpu_dev, NULL);
+    }
+
+    return NULL;
 }
 
 // backend CPU
@@ -975,8 +1356,8 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     return cpu_backend;
 }
 
-GGML_CALL bool ggml_backend_is_cpu(ggml_backend_t backend) {
-    return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_cpu_guid());
+GGML_CALL bool ggml_backend_is_cpu(ggml_backend_t backend_cpu) {
+    return backend_cpu != NULL && ggml_guid_matches(backend_cpu->guid, ggml_backend_cpu_guid());
 }
 
 void ggml_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads) {
@@ -1310,19 +1691,14 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
         if (src == NULL) {
             continue;
         }
-        if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-            int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
-            // check if a backend with higher prio wants to offload the op
-            if (offload_enabled && src_backend_id == sched->n_backends - 1) {
-                for (int b = 0; b < src_backend_id; b++) {
-                    if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
-                        SET_CAUSE(tensor, "1.off");
-                        return b;
-                    }
-                }
+        if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+            ggml_backend_supports_op(sched->backends[i], tensor)) {
+            if (offload_enabled && ggml_backend_offload_op(sched->backends[i], tensor)) {
+                SET_CAUSE(tensor, "1.off");
+                return i;
             }
             SET_CAUSE(tensor, "1.wgt%d", i);
-            return src_backend_id;
+            return i;
         }
     }
 
@@ -1437,7 +1813,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         int * node_backend_id = &tensor_backend_id(node);
         if (node->op == GGML_OP_REDUCE) {
             auto view_src = node->view_src;
-            int src_id = -1;
+            int first_id = -1;
+            int last_id = -1;
             for (int j = 0; j < node->op_params[1]; ++j) {
                 if (node->src[j]) {
                     int * this_node_backend_id = &tensor_backend_id(node->src[j]);
@@ -1447,19 +1824,30 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         GGML_ASSERT(*this_node_backend_id == j);
                     }
                     if (view_src == node->src[j]) {
-                        src_id = j;
+                        first_id = j;
+                    }
+                    if (view_src == node->src[j] || j == node->op_params[1] - 1) {
+                        last_id = j;
                     }
                 }
             }
-            if (src_id >= 0) {
+            if (first_id >= 0 && last_id >= 0) {
                 int * this_node_backend_id = &tensor_backend_id(view_src);
-                *this_node_backend_id = tensor_backend_id(node->src[src_id]);
+                *this_node_backend_id = tensor_backend_id(node->src[first_id]);
                 *node_backend_id = *this_node_backend_id;
+                if (last_id > first_id) {
+                    for (int j = first_id + 1; j <= last_id; ++j) {
+                        if (node->src[j]) {
+                            int * this_node_backend_id = &tensor_backend_id(node->src[j]);
+                            *this_node_backend_id = *node_backend_id;
+                        }
+                    }
+                }
             }
         }
+        // This is a hack for Cohere2. Without this hack the scheduler creates
+        // totally nonsensical splits for that arch
         else if (node->op == GGML_OP_MUL && node->src[0]->op == GGML_OP_NORM) {
-            // This is a hack for Cohere2. Without this hack the scheduler creates
-            // totally nonsensical splits for that arch
             int * src1_id = &tensor_backend_id(node->src[1]);
             if (*src1_id >= 0) {
                 int * src0_id = &tensor_backend_id(node->src[0]);
@@ -1470,15 +1858,9 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 // at this point. How? That's why this more logical approach of first checking is commented out
                 //if (*src0_id < 0) {
                 //    *src0_id = *src1_id;
-                //} else {
-                //    printf("Oops: backend_id_src0(%s) = %d, backend_id_src1(%s) = %d\n", node->src[0]->name, *src0_id, node->src[1]->name, *src1_id);
-                //    //GGML_ASSERT(*src0_id == *src1_id);
                 //}
                 //if (*dst_id < 0) {
                 //    *dst_id = *src1_id;
-                //} else {
-                //    printf("Oops: backend_id_dst(%s) = %d, backend_id_src1(%s) = %d\n", node->name, *dst_id, node->src[1]->name, *src1_id);
-                //    //GGML_ASSERT(*dst_id == *src1_id);
                 //}
             }
         }
@@ -1901,9 +2283,14 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             size_t id = hash_id(input);
             int backend_id = tensor_backend_id(input);
             for (int c = 0; c < sched->n_copies; c++) {
-                struct ggml_tensor * input_cpy = tensor_id_copy(id, backend_id, c);
-                sched->leaf_backend_ids[graph_copy->n_leafs] = backend_id;
-                graph_copy->leafs[graph_copy->n_leafs++] = input_cpy;
+                struct ggml_tensor * input_cpy = ggml_dup_tensor_layout(sched->ctx, input);
+                ggml_format_name(input_cpy, "%s#%s#%d", ggml_backend_name(sched->backends[backend_id]), input->name, c);
+                if (sched->n_copies > 1) {
+                    ggml_set_input(input_cpy);
+                    ggml_set_output(input_cpy); // prevent ggml-alloc from overwriting the tensor
+                }
+                tensor_id_copy(id, backend_id, c) = input_cpy;
+                SET_CAUSE(input_cpy, "4.cpy");
             }
         }
 
@@ -1995,7 +2382,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
             // wait for the split backend to finish using the input before overwriting it
             if (needs_sync[split_backend_id]) {
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                    ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
+                    ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
@@ -2118,28 +2505,28 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
         }
     } else {
         // similar to ggml_backend_compare_graph_backend
-        for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
-            struct ggml_tensor * t = split->graph.nodes[j0];
+        for (int i0 = 0; i0 < split->graph.n_nodes; i0++) {
+            struct ggml_tensor * t = split->graph.nodes[i0];
 
             // check if the user needs data from this node
             bool need = sched->callback_eval(t, true, sched->callback_eval_user_data);
 
-            int j1 = j0;
+            int i1 = i0;
 
             // determine the range [j0, j1] of nodes that can be computed together
-            while (!need && j1 < split->graph.n_nodes - 1) {
-                t = split->graph.nodes[++j1];
+            while (!need && i1 < split->graph.n_nodes - 1) {
+                t = split->graph.nodes[++i1];
                 need = sched->callback_eval(t, true, sched->callback_eval_user_data);
             }
 
-            struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
+            struct ggml_cgraph g1v = ggml_graph_view(&split->graph, i0, i1 + 1);
 
 #if IK_PRINT_TIMING
             int64_t tim2 = ggml_time_us();
             printf("%s(.2.): %d us\n", __func__, (int)(tim2-tim1));
 #endif
 
-            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
+            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &g1v);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
             }
@@ -2151,9 +2538,10 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
                 break;
             }
 
-            j0 = j1;
+            i0 = i1;
         }
     }
+
     return GGML_STATUS_SUCCESS;
 }
 

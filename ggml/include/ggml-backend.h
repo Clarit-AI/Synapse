@@ -12,6 +12,8 @@ extern "C" {
     typedef struct ggml_backend_event * ggml_backend_event_t;
     typedef struct ggml_backend * ggml_backend_t;
     typedef void * ggml_backend_graph_plan_t;
+    typedef struct ggml_backend_reg * ggml_backend_reg_t;
+    typedef struct ggml_backend_device * ggml_backend_dev_t;
 
     //
     // Backend buffer
@@ -126,6 +128,57 @@ extern "C" {
     GGML_API ggml_backend_t             ggml_backend_reg_init_backend(size_t i, const char * params); // params is backend-specific
     GGML_API ggml_backend_buffer_type_t ggml_backend_reg_get_default_buffer_type(size_t i);
     GGML_API ggml_backend_buffer_t      ggml_backend_reg_alloc_buffer(size_t i, size_t size);
+
+    //
+    // Backend device types
+    //
+
+    enum ggml_backend_dev_type {
+        GGML_BACKEND_DEVICE_TYPE_CPU,
+        GGML_BACKEND_DEVICE_TYPE_GPU,
+        GGML_BACKEND_DEVICE_TYPE_IGPU,
+        GGML_BACKEND_DEVICE_TYPE_ACCEL
+    };
+
+    struct ggml_backend_dev_caps {
+        bool async;
+        bool host_buffer;
+        bool buffer_from_host_ptr;
+        bool events;
+    };
+
+    struct ggml_backend_dev_props {
+        const char * name;
+        const char * description;
+        size_t memory_free;
+        size_t memory_total;
+        enum ggml_backend_dev_type type;
+        const char * device_id;
+        struct ggml_backend_dev_caps caps;
+    };
+
+    //
+    // Backend registry (device-aware)
+    //
+
+    GGML_API size_t             ggml_backend_reg_count(void);
+    GGML_API ggml_backend_reg_t ggml_backend_reg_get(size_t index);
+    GGML_API ggml_backend_reg_t ggml_backend_reg_by_name(const char * name);
+    GGML_API void               ggml_backend_register_reg(ggml_backend_reg_t reg);
+
+    GGML_API size_t             ggml_backend_dev_count(void);
+    GGML_API ggml_backend_dev_t ggml_backend_dev_get(size_t index);
+    GGML_API ggml_backend_dev_t ggml_backend_dev_by_name(const char * name);
+    GGML_API ggml_backend_dev_t ggml_backend_dev_by_type(enum ggml_backend_dev_type type);
+    GGML_API void               ggml_backend_dev_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props);
+
+    GGML_API size_t             ggml_backend_reg_dev_count(ggml_backend_reg_t reg);
+    GGML_API ggml_backend_dev_t ggml_backend_reg_dev_get(ggml_backend_reg_t reg, size_t index);
+
+    GGML_API ggml_backend_t ggml_backend_init_by_name(const char * name, const char * params);
+    GGML_API ggml_backend_t ggml_backend_init_by_type(enum ggml_backend_dev_type type, const char * params);
+    GGML_API ggml_backend_t ggml_backend_init_from_dev(ggml_backend_dev_t dev, const char * params);
+    GGML_API ggml_backend_t ggml_backend_init_best(void);
 
     //
     // Backend scheduler
