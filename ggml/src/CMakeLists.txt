@@ -1373,6 +1373,9 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
             # else we fail on Gravitons and such
             list(APPEND ARCH_FLAGS -flax-vector-conversions)
         endif()
+        if (GGML_NATIVE)
+            list(APPEND ARCH_FLAGS -march=native)
+        endif()
     endif()
 elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LWR MATCHES "^(x86_64|i686|amd64|x64|win32)$" OR
         (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM_LWR AND
