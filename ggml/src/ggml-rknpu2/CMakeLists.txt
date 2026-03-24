@@ -25,6 +25,6 @@ target_link_libraries(ggml-rknpu2 PRIVATE
 
 # Adding OpenMP in build
 if(OpenMP_FOUND)
-    add_definitions(-DHAVE_OPENMP=1)
-    list(APPEND CMAKE_CXX_FLAGS "${OpenMP_CXX_FLAGS}")
+    target_compile_definitions(ggml-rknpu2 PRIVATE HAVE_OPENMP=1)
+    target_link_libraries(ggml-rknpu2 PRIVATE OpenMP::OpenMP_CXX)
 endif()

@@ -162,9 +162,14 @@ extern "C" {
     GGML_API ggml_backend_dev_t ggml_backend_dev_get(size_t index);
     GGML_API ggml_backend_dev_t ggml_backend_dev_by_name(const char * name);
     GGML_API ggml_backend_dev_t ggml_backend_dev_by_type(enum ggml_backend_dev_type type);
+    GGML_API void               ggml_backend_dev_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props);
+
+    GGML_API size_t             ggml_backend_reg_dev_count(ggml_backend_reg_t reg);
+    GGML_API ggml_backend_dev_t ggml_backend_reg_dev_get(ggml_backend_reg_t reg, size_t index);
 
     GGML_API ggml_backend_t ggml_backend_init_by_name(const char * name, const char * params);
     GGML_API ggml_backend_t ggml_backend_init_by_type(enum ggml_backend_dev_type type, const char * params);
+    GGML_API ggml_backend_t ggml_backend_init_from_dev(ggml_backend_dev_t dev, const char * params);
     GGML_API ggml_backend_t ggml_backend_init_best(void);
 
     //

@@ -25,7 +25,7 @@ cd rk-llama.cpp
 
 ```sh
 mkdir build && cd build
-cmake .. -DLLAMA_RKNPU2=ON
+cmake .. -DGGML_RKNPU2=ON
 make -j4
 ```
 

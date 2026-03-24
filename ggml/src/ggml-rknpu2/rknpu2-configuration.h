@@ -144,6 +144,15 @@ private:
 
     std::map<std::string, Rknpu2DeviceConfig> device_configs;
     const Rknpu2DeviceConfig* current_config = nullptr;
+
+    // Split factor for IOVA exhaustion handling - set at backend init
+    int split_factor = 1;
 };
+
+/**
+ * @brief Set the global split factor for IOVA exhaustion handling.
+ * @param factor The split factor value (1-16).
+ */
+void set_split_factor(int factor);
 
 } // namespace rknpu2_configuration

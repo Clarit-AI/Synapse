@@ -305,6 +305,10 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
 bool Rknpu2ConfigManager::select_device(const std::string& device_name) {
     auto it = device_configs.find(device_name);
     if (it != device_configs.end()) {
+        // Reset tensor sequence state for this device to ensure consistent hybrid pattern
+        // selection for each new model load
+        it->second.tensor_sequence_map.clear();
+        it->second.global_tensor_counter = 0;
         current_config = &it->second;
         return true;
     }
@@ -314,6 +318,10 @@ bool Rknpu2ConfigManager::select_device(const std::string& device_name) {
 const Rknpu2DeviceConfig& Rknpu2ConfigManager::get_current_config() const {
     GGML_ASSERT(current_config != nullptr && "No device configuration selected or available.");
     return *current_config;
+}
+
+void set_split_factor(int factor) {
+    Rknpu2ConfigManager::get_instance().split_factor = factor;
 }
 
 } // namespace rknpu2_configuration

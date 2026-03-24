@@ -110,12 +110,12 @@ if (GGML_METAL)
         # Append macOS metal versioning flags
         if (GGML_METAL_MACOSX_VERSION_MIN)
             message(STATUS "Adding  -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN} flag to metal compilation")
-            list   (APPEND XC_FLAGS -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN})
+            string(APPEND XC_FLAGS " -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN}")
         endif()
 
         if (GGML_METAL_STD)
             message(STATUS "Adding  -std=${GGML_METAL_STD} flag to metal compilation")
-            list   (APPEND XC_FLAGS -std=${GGML_METAL_STD})
+            string(APPEND XC_FLAGS " -std=${GGML_METAL_STD}")
         endif()
 
         add_custom_command(
@@ -503,7 +503,7 @@ if (GGML_RKNPU2)
         find_package(OpenMP)
         if (OpenMP_FOUND)
             add_compile_definitions(HAVE_OPENMP=1)
-            list(APPEND CMAKE_CXX_FLAGS "${OpenMP_CXX_FLAGS}")
+            string(APPEND CMAKE_CXX_FLAGS " ${OpenMP_CXX_FLAGS}")
         else()
             message(WARNING "OpenMP not found - RKNPU2 will build without multi-threading optimizations")
         endif()
@@ -1464,7 +1464,7 @@ add_compile_options("$<$<COMPILE_LANGUAGE:C>:${ARCH_FLAGS}>")
 
 if (GGML_CUDA)
     list(APPEND CUDA_CXX_FLAGS ${ARCH_FLAGS})
-    list(JOIN   CUDA_CXX_FLAGS " " CUDA_CXX_FLAGS_JOINED)  # pass host compiler flags as a single argument
+    string(APPEND CUDA_CXX_FLAGS " " ${CUDA_CXX_FLAGS_JOINED})  # pass host compiler flags as a single argument
 
     if (NOT CUDA_CXX_FLAGS_JOINED STREQUAL "")
         list(APPEND CUDA_FLAGS -Xcompiler ${CUDA_CXX_FLAGS_JOINED})

@@ -254,6 +254,7 @@ static rknpu_memory_context & get_rknpu_memory_context() {
 }
 
 // Parse RKNN_CORE_MASK environment variable
+// Accepts: "0", "1", "2", "auto", or hex values like "0x1", "0x3", "0x7"
 static rknn_core_mask parse_core_mask_env() {
     const char* env = getenv("RKNN_CORE_MASK");
     if (!env) return RKNN_NPU_CORE_AUTO;
@@ -261,6 +262,13 @@ static rknn_core_mask parse_core_mask_env() {
     if (strcmp(env, "1") == 0) return RKNN_NPU_CORE_1;
     if (strcmp(env, "2") == 0) return RKNN_NPU_CORE_2;
     if (strcmp(env, "auto") == 0) return RKNN_NPU_CORE_AUTO;
+    // Handle hex values like 0x1, 0x3, 0x7
+    if (strncmp(env, "0x", 2) == 0 || strncmp(env, "0X", 2) == 0) {
+        int val = strtol(env, NULL, 16);
+        if (val >= 0x1 && val <= 0x7) {
+            return (rknn_core_mask)val;
+        }
+    }
     fprintf(stderr, "RKNPU2: Unknown RKNN_CORE_MASK '%s', defaulting to AUTO\n", env);
     return RKNN_NPU_CORE_AUTO;
 }
@@ -616,6 +624,12 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 // Buffer
 //
 
+static const char * ggml_backend_rknpu_buffer_name(ggml_backend_buffer_t buffer) {
+    return "RKNPU";
+
+    GGML_UNUSED(buffer);
+}
+
 static void ggml_backend_rknpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
     rknpu2_allocation::free(ctx->dma_buf);
@@ -774,7 +788,8 @@ static void pack_tensor(
     int K_op, int N, int core_count,
     const rknpu2_configuration::Rknpu2HardwarePipeline * pipeline
 ) {
-    auto segments = compute_matrix_segments(N, core_count, pipeline->n_align);
+    const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
+    auto segments = compute_matrix_segments(N, core_count, pipeline->n_align, config.split_factor);
     uint8_t* current_write_ptr = dst_dma_ptr;
     std::vector<uint8_t> packed_temp;
 
@@ -809,6 +824,15 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
     if (pipeline && pipeline->pack_func) {
         const int K = (int)tensor->ne[0];
         const int N = (int)tensor->ne[1];
+
+        // Validate tensor dimensions are compatible with the pipeline
+        // If N is not aligned to n_align, fall back to CPU to avoid assertion failures in pack_func
+        if (N % pipeline->n_align != 0) {
+            fprintf(stderr, "RKNPU2: tensor '%s' has N=%d not aligned to %d, falling back to CPU\n",
+                    tensor->name, N, pipeline->n_align);
+            memcpy(tensor_dma_ptr + offset, data, size);
+            return;
+        }
 
         const int K_op = pipeline->use_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
 
@@ -855,6 +879,7 @@ static ggml_backend_buffer_t ggml_backend_rknpu_buffer_type_alloc_buffer(ggml_ba
     };
 
     static const ggml_backend_buffer_i rknpu_buffer_interface = {
+        /* .get_name      = */ ggml_backend_rknpu_buffer_name,
         /* .free_buffer   = */ ggml_backend_rknpu_buffer_free_buffer,
         /* .get_base      = */ ggml_backend_rknpu_buffer_get_base,
         /* .init_tensor   = */ ggml_backend_rknpu_buffer_init_tensor,
@@ -1072,6 +1097,7 @@ static ggml_backend_t ggml_backend_rknpu_device_init_backend(ggml_backend_dev_t 
     ggml_backend_rknpu_context * ctx = new ggml_backend_rknpu_context();
     ctx->core_mask = parse_core_mask_env();
     ctx->split_factor = parse_split_factor_env();
+    rknpu2_configuration::set_split_factor(ctx->split_factor);
     fprintf(stderr, "RKNPU2: Using device '%s' with core_mask=%d, split_factor=%d\n", device_name, ctx->core_mask, ctx->split_factor);
     
     static const struct ggml_backend_i rknpu_backend_interface = {

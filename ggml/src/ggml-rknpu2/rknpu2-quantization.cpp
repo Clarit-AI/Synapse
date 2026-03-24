@@ -1,6 +1,9 @@
-#include <arm_neon.h>
 #include <cmath>
 #include <algorithm>
+
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
 
 #include "rknpu2-quantization.h"
 
