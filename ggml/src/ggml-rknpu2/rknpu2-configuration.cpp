@@ -332,7 +332,7 @@ const Rknpu2DeviceConfig& Rknpu2ConfigManager::get_current_config() const {
 }
 
 void set_split_factor(int factor) {
-    Rknpu2ConfigManager::get_instance().split_factor = factor;
+    Rknpu2ConfigManager::get_instance().set_split_factor_internal(factor);
 }
 
 } // namespace rknpu2_configuration

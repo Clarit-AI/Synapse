@@ -135,6 +135,18 @@ public:
      */
     const Rknpu2DeviceConfig& get_current_config() const;
 
+    /**
+     * @brief Get the current split factor.
+     * @return The current split factor value.
+     */
+    int get_split_factor() const { return split_factor; }
+
+    /**
+     * @brief Set the split factor.
+     * @param factor The split factor value to set.
+     */
+    void set_split_factor_internal(int factor) { split_factor = factor; }
+
 private:
     // Private constructor, destructor, and copy operators to enforce singleton pattern
     Rknpu2ConfigManager();

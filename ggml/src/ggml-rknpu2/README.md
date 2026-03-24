@@ -71,10 +71,10 @@ make -j4
 
 ```sh
 # For Dense models
-./build/bin/llama-cli -m ./gemma-3-1b-it-Q8_0.gguf
+./bin/llama-cli -m ../gemma-3-1b-it-Q8_0.gguf
 
 # For MoE models
-./build/bin/llama-cli -m ./LFM2-8B-A1B-Q4_0.gguf --cpu-moe
+./bin/llama-cli -m ../LFM2-8B-A1B-Q4_0.gguf --cpu-moe
 ```
 
 ## Benchmarks

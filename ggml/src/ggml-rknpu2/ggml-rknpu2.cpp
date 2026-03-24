@@ -786,10 +786,10 @@ static void pack_tensor(
     const uint8_t* src_data,
     uint8_t* dst_dma_ptr,
     int K_op, int N, int core_count,
-    const rknpu2_configuration::Rknpu2HardwarePipeline * pipeline
+    const rknpu2_configuration::Rknpu2HardwarePipeline * pipeline,
+    int split_factor
 ) {
-    const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
-    auto segments = compute_matrix_segments(N, core_count, pipeline->n_align, config.split_factor);
+    auto segments = compute_matrix_segments(N, core_count, pipeline->n_align, split_factor);
     uint8_t* current_write_ptr = dst_dma_ptr;
     std::vector<uint8_t> packed_temp;
 
@@ -838,7 +838,8 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
 
         std::vector<float> fp32_matrix = dequantize_tensor(tensor, ctx, data, K, N, K_op, pipeline->use_hadamard);
         std::vector<uint8_t> npu_matrix = quantize_tensor(tensor, ctx, fp32_matrix, K_op, N, pipeline->npu_type_a);
-        pack_tensor(npu_matrix.data(), tensor_dma_ptr, K_op, N, config.core_count, pipeline);
+        int split_factor = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_split_factor();
+        pack_tensor(npu_matrix.data(), tensor_dma_ptr, K_op, N, config.core_count, pipeline, split_factor);
     } else {
         memcpy(tensor_dma_ptr + offset, data, size);
     }
@@ -911,7 +912,15 @@ static size_t ggml_backend_rknpu_buffer_type_get_alloc_size(ggml_backend_buffer_
     if (pipeline) {
         const int K = (int)tensor->ne[0];
         const int N = (int)tensor->ne[1];
-        auto segments = compute_matrix_segments(N, config.core_count, pipeline->n_align);
+
+        // Check alignment - must match the check in set_tensor to avoid allocation/packing mismatch
+        if (N % pipeline->n_align != 0) {
+            // Fall back to CPU allocation size if not aligned
+            return ggml_nbytes(tensor);
+        }
+
+        int split_factor = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_split_factor();
+        auto segments = compute_matrix_segments(N, config.core_count, pipeline->n_align, split_factor);
 
         const int K_op = pipeline->use_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
 

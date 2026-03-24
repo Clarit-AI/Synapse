@@ -140,6 +140,13 @@ extern "C" {
         GGML_BACKEND_DEVICE_TYPE_ACCEL
     };
 
+    struct ggml_backend_dev_caps {
+        bool async;
+        bool host_buffer;
+        bool buffer_from_host_ptr;
+        bool events;
+    };
+
     struct ggml_backend_dev_props {
         const char * name;
         const char * description;
@@ -147,6 +154,7 @@ extern "C" {
         size_t memory_total;
         enum ggml_backend_dev_type type;
         const char * device_id;
+        struct ggml_backend_dev_caps caps;
     };
 
     //
