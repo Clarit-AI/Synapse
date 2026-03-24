@@ -331,7 +331,7 @@ class GGUFWriter:
                     token IDs that represent the model's actual thinking token(s).
         """
         import json
-        self.add_string(gguf.GGUFKeys.Tokenizer.THINKING_TOKEN_ALIAS, json.dumps(aliases))
+        self.add_string(Keys.Tokenizer.THINKING_TOKEN_ALIAS, json.dumps(aliases))
 
     @staticmethod
     def ggml_pad(x: int, n: int) -> int:

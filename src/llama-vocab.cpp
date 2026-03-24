@@ -2156,11 +2156,21 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
                 auto aliases = parse_aliases(json_str);
                 for (const auto & kv_pair : aliases) {
-                    // For now, take the first token ID (assume single-token thinking markers)
-                    if (!kv_pair.second.empty()) {
-                        token_alias[kv_pair.first] = kv_pair.second[0];
-                        LLAMA_LOG_INFO("%s: thinking token alias '%s' -> token %d\n", __func__, kv_pair.first.c_str(), kv_pair.second[0]);
+                    // Validate: must be exactly one token ID
+                    if (kv_pair.second.size() != 1) {
+                        LLAMA_LOG_ERROR("%s: invalid thinking token alias '%s': expected exactly 1 token ID, got %zu\n",
+                            __func__, kv_pair.first.c_str(), kv_pair.second.size());
+                        return false;
                     }
+                    const llama_token id = kv_pair.second[0];
+                    // Validate: token ID must be in valid range
+                    if (id < 0 || id >= (llama_token)id_to_token.size()) {
+                        LLAMA_LOG_ERROR("%s: invalid thinking token alias '%s': token ID %d out of range [0, %zu)\n",
+                            __func__, kv_pair.first.c_str(), id, id_to_token.size());
+                        return false;
+                    }
+                    token_alias[kv_pair.first] = id;
+                    LLAMA_LOG_INFO("%s: thinking token alias '%s' -> token %d\n", __func__, kv_pair.first.c_str(), id);
                 }
             }
         }
@@ -3497,11 +3507,6 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
 
 llama_token llama_vocab::text_to_token(const std::string & text) const {
     GGML_ASSERT(pimpl->type != LLAMA_VOCAB_TYPE_NONE);
-    // check alias map first (e.g., <think> -> model's think token)
-    auto alias_it = pimpl->token_alias.find(text);
-    if (alias_it != pimpl->token_alias.end()) {
-        return alias_it->second;
-    }
     auto it = pimpl->token_to_id.find(text);
     if (it != pimpl->token_to_id.end()) {
         return (*it).second;

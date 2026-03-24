@@ -77,10 +77,19 @@ def main():
     token_types_key = vocab_key.replace('tokens', 'token_type')
 
     tokens_data = reader.fields[vocab_key]
-    if hasattr(tokens_data, 'parts'):
-        # Multiple parts
+    # Use contents() to get the actual token list
+    if hasattr(tokens_data, 'contents'):
         tokens = []
-        for i, part in enumerate(tokens_data.parts):
+        for token in tokens_data.contents():
+            if isinstance(token, bytes):
+                tokens.append(token.decode('utf-8', errors='replace'))
+            else:
+                tokens.append(str(token))
+    elif hasattr(tokens_data, 'data') and hasattr(tokens_data, 'parts'):
+        # Fallback: use data indices to extract real tokens from parts
+        tokens = []
+        for idx in tokens_data.data:
+            part = tokens_data.parts[idx]
             if isinstance(part, bytes):
                 tokens.append(part.decode('utf-8', errors='replace'))
             else:
@@ -105,25 +114,27 @@ def main():
         id_to_token[i] = token_text
 
     # Find thinking tokens
-    think_start_id = find_token_id({'token_to_id': token_to_id, 'id_to_token': id_to_token},
-                                    args.think_start)
-    think_end_id = find_token_id({'token_to_id': token_to_id, 'id_to_token': id_to_token},
-                                  args.think_end)
+    think_start_id = find_token_id(
+        {'token_to_id': token_to_id, 'id_to_token': id_to_token},
+        args.think_start)
+    think_end_id = find_token_id(
+        {'token_to_id': token_to_id, 'id_to_token': id_to_token},
+        args.think_end)
 
     if think_start_id is None:
-        print(f"WARNING: Could not find thinking start token '{args.think_start}' in vocab")
-        print(f"  Available tokens containing '◁':")
+        print("WARNING: Could not find thinking start token '{}' in vocab".format(args.think_start))
+        print("  Available tokens containing '◁':")
         for t in tokens:
             if '◁' in t:
-                print(f"    '{t}' -> {token_to_id.get(t, 'NOT FOUND')}")
+                print("    '{}' -> {}".format(t, token_to_id.get(t, 'NOT FOUND')))
         sys.exit(1)
 
     if think_end_id is None:
-        print(f"WARNING: Could not find thinking end token '{args.think_end}' in vocab")
-        print(f"  Available tokens containing '◁':")
+        print("WARNING: Could not find thinking end token '{}' in vocab".format(args.think_end))
+        print("  Available tokens containing '◁':")
         for t in tokens:
             if '◁' in t:
-                print(f"    '{t}' -> {token_to_id.get(t, 'NOT FOUND')}")
+                print("    '{}' -> {}".format(t, token_to_id.get(t, 'NOT FOUND')))
         sys.exit(1)
 
     print(f"Found think start token '{args.think_start}' -> ID {think_start_id}")
@@ -146,7 +157,14 @@ def main():
         if key == gguf.GGUFKeys.Tokenizer.THINKING_TOKEN_ALIAS:
             # Skip existing alias key, we'll add our own
             continue
-        writer.add_key_value(key, field)
+        # Extract value and type from ReaderField
+        if hasattr(field, 'contents') and hasattr(field, 'types'):
+            value = field.contents()
+            vtype = field.types[0]
+            writer.add_key_value(key, value, vtype)
+        else:
+            # Fallback for simple fields
+            writer.add_key_value(key, field.parts[field.data[0]] if hasattr(field, 'data') else field, field.types[0])
 
     # Add the thinking token alias
     writer.add_string(gguf.GGUFKeys.Tokenizer.THINKING_TOKEN_ALIAS, aliases_json)
