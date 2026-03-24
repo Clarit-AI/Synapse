@@ -55,8 +55,8 @@ cmake .. -DGGML_RKNPU2=ON -DRKNN_USE_SYSTEM_SDK=ON
 1. Clone the repository
 
 ```sh
-git clone https://github.com/invisiofficial/rk-llama.cpp
-cd rk-llama.cpp
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp
 ```
 
 2. Build the project
