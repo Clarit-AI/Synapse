@@ -12,6 +12,44 @@ The primary motivation is to leverage the NPU as a powerful accelerator. This ap
 
 Currently, the backend is optimized and tested for the **RK3588** SoC. Support for other Rockchip SoCs can be added by updating the configuration file.
 
+## RKNN SDK Licensing ⚠️
+
+**IMPORTANT**: The Rockchip RKNN SDK (`rknn_api.h`, `rknn_matmul_api.h`, `librknnrt.so`) is **proprietary and confidential** software. By using this backend, you agree to Rockchip's license terms.
+
+### Option 1: System Package (Recommended)
+
+On Debian/Ubuntu systems, install the RKNN runtime from Rockchip's official package repository:
+
+```sh
+sudo apt-get install librknnrt2 librknnrt2-dev
+```
+
+Then build with:
+
+```sh
+cmake .. -DGGML_RKNPU2=ON -DRKNN_USE_SYSTEM_SDK=ON
+```
+
+### Option 2: Manual SDK Installation
+
+1. Download the Rockchip RKNN SDK from [Rockchip's official releases](https://github.com/rockchip-linux/rknn-llm)
+2. Extract the SDK to a directory of your choice
+3. Set the environment variable:
+   ```sh
+   export RKNN_SDK_ROOT=/path/to/rknn_sdk
+   ```
+4. Copy headers and library to the project:
+   ```sh
+   cp -r $RKNN_SDK_ROOT/include libs/
+   cp $RKNN_SDK_ROOT/lib/librknnrt.so libs/
+   ```
+5. Build:
+   ```sh
+   cmake .. -DGGML_RKNPU2=ON
+   ```
+
+---
+
 ## Quick start
 
 1. Clone the repository
