@@ -202,6 +202,21 @@ cmake --build build --config Release -j$(nproc)
 
 ## Performance Benchmarks
 
+### Benchmark Methodology
+
+The numbers in the tables below were collected under the following conditions:
+
+- **Hardware**: Apple M2-Max (ARM NEON)
+- **Model**: Kimi-VL-A3B (MoE model) quantized to the indicated format
+- **Context length**: 512 tokens prompt + 128 token generation (`pp512` / `tg128`)
+- **Batch size**: 2048 (`-b 2048 -ub 2048`)
+- **Inference flags**: `-fa -fmoe -ctk q8_0 -ctv q8_0 -rtr`
+- **Compilation**: Release build with ARM architecture flags (`-march=armv8.2-a+dotprod+fp16`)
+- **Measurement**: Warm runs; throughput (t/s) is the mean over 3 consecutive runs
+- **Reported values**: tokens per second (t/s); higher is better
+
+These conditions may not match your hardware exactly. Use them as a relative reference when comparing formats or flags.
+
 ### ARM NEON Speedups (M2-Max)
 
 | Format | Prompt Processing (pp512) | Token Gen (tg128) | vs Standard i-quant |
