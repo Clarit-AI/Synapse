@@ -95,6 +95,29 @@ That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser start
 
 ### [Rockchip NPU / RKNPU2 Backend](./docs/npu/README.md) - Neural Processing Unit acceleration for RK3588/RK3576
 
+### Performance Optimization for CPU/ARM
+
+For best performance on CPU-only or ARM devices (including Rockchip RK3588/RK3576, Apple Silicon):
+
+```bash
+./build/bin/llama-server \
+  -m model-IQ4_K_R4.gguf \
+  -t 4 -c 4096 \
+  -fa -fmoe -ctk q8_0 -ctv q8_0 \
+  -b 2048 -ub 2048 -rtr
+```
+
+**Key optimizations:**
+- **IQ4_K_R4 / IQ3_K_R4**: 1.7-1.9x faster than standard IQ formats on ARM NEON
+- **-fa**: Flash attention for major prompt processing speedup
+- **-fmoe**: Fused MoE operations for MoE models
+- **-ctk/-ctv q8_0**: KV cache quantization reduces memory pressure
+- **-rtr**: Runtime tensor repacking enables R4 variant performance
+
+> **KT formats (IQ3_KT, IQ4_KT) have poor CPU/ARM performance** - use K formats instead.
+
+See [CPU/ARM Optimization Guide](./docs/cpu-arm-optimization.md) for comprehensive coverage including quantization selection, build options, performance benchmarks, and instructions for quantizing your own models.
+
 ## Latest News
 
 
