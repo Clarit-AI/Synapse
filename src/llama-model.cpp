@@ -1851,18 +1851,26 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
         }
         return LLM_TENSOR_UNKNOWN;
     }
+    llm_tensor best_match = LLM_TENSOR_UNKNOWN;
+    size_t best_match_len = 0;
     for (auto & entry : it->second) {
         auto base_name = ::format(entry.second.c_str(), il);
         auto this_name = base_name + ".weight";
         if (tensor_name.find(this_name) == 0) {
-            return entry.first;
+            if (this_name.size() > best_match_len) {
+                best_match_len = this_name.size();
+                best_match = entry.first;
+            }
         }
         this_name = base_name + ".bias";
         if (tensor_name.find(this_name) == 0) {
-            return entry.first;
+            if (this_name.size() > best_match_len) {
+                best_match_len = this_name.size();
+                best_match = entry.first;
+            }
         }
     }
-    return LLM_TENSOR_UNKNOWN;
+    return best_match;
 }
 
 size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const {
