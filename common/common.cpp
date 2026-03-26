@@ -1487,7 +1487,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--cpu-moe" || arg == "-cmoe") {
-        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate|gate_up)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
+        params.ncmoe = 999;
+        //params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate|gate_up)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
         return true;
     }
     if (arg == "--n-cpu-moe" || arg == "-ncmoe") {
@@ -1503,6 +1504,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         //    std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
         //    params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
         //}
+        return true;
+    }
+    if (arg == "--fit") {
+        params.fit = true;
+        return true;
+    }
+    if (arg == "--fit-margin") {
+        CHECK_ARG;
+        int32_t margin = std::stoi(argv[i]);
+        if (margin < 0) {
+            fprintf(stderr, "error: Invalid value for --fit-margin: %d (must be >= 0)\n", margin);
+            invalid_param = true;
+        } else {
+            params.fit_margin = margin;
+        }
         return true;
     }
     if (arg == "--no-mmap") {
@@ -1986,6 +2002,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.use_jinja = true;
         return true;
     }
+    if (arg == "--peg") {
+        params.use_peg = true;
+        return true;
+    }
     if (arg == "--chat-template-kwargs") {
         CHECK_ARG
         std::string value = argv[i];
@@ -2273,6 +2293,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-h,    --help, --usage",        "print usage and exit" });
     options.push_back({ "*",           "       --version",              "show version and build info" });
     options.push_back({ "*",           "-v,    --verbose",              "print verbose information" });
+    options.push_back({ "*",           "       --minilog",              "print important information" });
     options.push_back({ "*",           "       --verbosity N",          "set specific verbosity level (default: %d)", params.verbosity });
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
     options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
@@ -2401,6 +2422,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
+    options.push_back({ "main",        "       --peg",
+                                                                    "use peg parser for qwen3.5 models.\n"
+                                                                    "https://github.com/ikawrakow/ik_llama.cpp/pull/1490" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
     options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
@@ -2503,6 +2527,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
+    options.push_back({ "*",           "       --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
@@ -3337,6 +3363,8 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu         = params.max_gpu;
     mparams.ncmoe           = params.ncmoe;
+    mparams.fit             = params.fit;
+    mparams.fit_margin      = params.fit_margin;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
     mparams.max_ctx_size    = params.n_ctx;
@@ -4392,6 +4420,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "max_gpu: %d # default: 0\n", params.max_gpu);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
+    fprintf(stream, "fit: %d # default: false\n", params.fit);
+    fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
     fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);
