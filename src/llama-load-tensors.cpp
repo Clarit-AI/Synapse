@@ -3985,19 +3985,21 @@ bool create_tensors_helper::create_tensors() {
             if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
                 adjust_split(cur_splits, mem_used, model.max_gpu);
-                LLAMA_LOG_INFO("Adjusted split at layer %2d:  ", il);
+                std::ostringstream split_log;
+                split_log << "Adjusted split at layer " << il << ":  ";
                 float last_split = 0;
                 for (int i = 0; i < (int)cur_splits.size(); ++i) {
                     if (i > 0) {
-                        LLAMA_LOG_INFO(" ; ");
+                        split_log << " ; ";
                     }
-                    LLAMA_LOG_INFO("GPU%d: %4g", i, cur_splits[i] - last_split);
+                    split_log << "GPU" << i << ": " << (cur_splits[i] - last_split);
                     if (i < int(gpu_split_count.size())) {
                         gpu_split_count[i] += cur_splits[i] - last_split;
                     }
                     last_split = cur_splits[i];
                 }
-                LLAMA_LOG_INFO("\n");
+                split_log << "\n";
+                LLAMA_LOG_INFO("%s", split_log.str().c_str());
             }
             LLAMA_LOG_DEBUG("=== Layer %2d. Mem used so far:", il);
             for ([[maybe_unused]] auto mem : mem_used) LLAMA_LOG_DEBUG(" %g", mem/1024./1024.);

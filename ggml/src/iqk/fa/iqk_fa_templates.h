@@ -1359,11 +1359,12 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
         KQHelper::convert(q_step, stride_q, q, q_f16);
 #endif
         auto mr = mask;
-        auto Mc = (const uint16_t *)(mr + (q_step - 1)*stride_m);
+        auto last_row_mask = (const uint16_t *)(mr + (q_step - 1)*stride_m);
         int ik = nk1 - k_step;
-        for (; ik >=0 && Mc[ik] != 0; ik -= k_step);
+        for (; ik >=0 && last_row_mask[ik] != 0; ik -= k_step);
         ik += k_step;
         for (int k1 = 0; k1 < ik/k_step; ++k1) {
+            auto block_mask = (const uint16_t *)mr;
 #ifdef __aarch64__
             KQHelper::multiply_mask_kq(kh, Dk, stride_m, q_f16, mr, fms);
 #else

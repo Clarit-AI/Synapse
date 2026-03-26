@@ -2065,7 +2065,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         result[il] += size;
-        if (auto pos = name.rfind(".bias"); pos < name.size() && name.size() - pos == 4) {
+        if (name.ends_with(".bias")) {
             // bias, we don't need to account for those
             continue;
         }
