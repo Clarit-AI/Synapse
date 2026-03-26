@@ -326,10 +326,30 @@ static common_hybrid_rule parse_rule(const json & rule_json) {
         if (!ms.is_object()) {
             throw std::runtime_error("hybrid manifest rule 'min_shape' must be an object");
         }
-        if (ms.contains("k_align")) rule.min_shape.k_align = ms.at("k_align").get<int32_t>();
-        if (ms.contains("n_align")) rule.min_shape.n_align = ms.at("n_align").get<int32_t>();
-        if (ms.contains("min_m")) rule.min_shape.min_m = ms.at("min_m").get<int32_t>();
-        if (ms.contains("min_n")) rule.min_shape.min_n = ms.at("min_n").get<int32_t>();
+        if (ms.contains("k_align")) {
+            rule.min_shape.k_align = ms.at("k_align").get<int32_t>();
+            if (rule.min_shape.k_align < 0) {
+                throw std::runtime_error("hybrid manifest rule.min_shape.k_align in ms must be >= 0");
+            }
+        }
+        if (ms.contains("n_align")) {
+            rule.min_shape.n_align = ms.at("n_align").get<int32_t>();
+            if (rule.min_shape.n_align < 0) {
+                throw std::runtime_error("hybrid manifest rule.min_shape.n_align in ms must be >= 0");
+            }
+        }
+        if (ms.contains("min_m")) {
+            rule.min_shape.min_m = ms.at("min_m").get<int32_t>();
+            if (rule.min_shape.min_m < 0) {
+                throw std::runtime_error("hybrid manifest rule.min_shape.min_m in ms must be >= 0");
+            }
+        }
+        if (ms.contains("min_n")) {
+            rule.min_shape.min_n = ms.at("min_n").get<int32_t>();
+            if (rule.min_shape.min_n < 0) {
+                throw std::runtime_error("hybrid manifest rule.min_shape.min_n in ms must be >= 0");
+            }
+        }
     }
 
     if (rule_json.contains("fallback")) {

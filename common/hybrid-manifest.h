@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <regex>
 #include <string>
 #include <unordered_map>

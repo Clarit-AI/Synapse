@@ -279,6 +279,9 @@ struct cmd_params {
     bool sas = false;
     int  max_gpu = 0;
     bool print_overrides = false;
+    std::string hybrid_manifest;
+    std::string hybrid_profile;
+    bool hybrid_strict = false;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -325,6 +328,9 @@ static const cmd_params cmd_params_defaults = {
     /* sas                  */ false,
     /* max_gpu              */ 0,
     /* print_overrides      */ false,
+    /* hybrid_manifest      */ {},
+    /* hybrid_profile       */ {},
+    /* hybrid_strict        */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -992,13 +998,13 @@ struct cmd_params_instance {
         mparams.tensor_buft_overrides = buft_overrides;
         mparams.mla = mla_attn;
         mparams.max_gpu = max_gpu;
-        if (hybrid_manifest_enabled && !hybrid_manifest.empty()) {
-            mparams.hybrid_manifest = hybrid_manifest.c_str();
+        if (test::hybrid_manifest_enabled && !test::hybrid_manifest.empty()) {
+            mparams.hybrid_manifest = test::hybrid_manifest.c_str();
         }
-        if (hybrid_profile_enabled && !hybrid_profile.empty()) {
-            mparams.hybrid_profile = hybrid_profile.c_str();
+        if (test::hybrid_profile_enabled && !test::hybrid_profile.empty()) {
+            mparams.hybrid_profile = test::hybrid_profile.c_str();
         }
-        if (hybrid_strict_enabled) {
+        if (test::hybrid_strict_enabled) {
             mparams.hybrid_strict = true;
         }
 

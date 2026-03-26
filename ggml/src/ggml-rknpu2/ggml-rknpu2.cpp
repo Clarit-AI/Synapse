@@ -994,9 +994,17 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
             const struct ggml_tensor * src0 = op->src[0]; // Weights
             const struct ggml_tensor * src1 = op->src[1]; // Activations
             const auto & config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
-            const auto * manifest_route = config.resolve_manifest_route(src0);
-            const bool manifest_strict = manifest_route != nullptr && manifest_route->strict;
-            const bool manifest_mode = manifest_route != nullptr;
+            const auto * manifest_route = nullptr;
+            bool manifest_strict = false;
+            bool manifest_mode = false;
+            try {
+                manifest_route = config.resolve_manifest_route(src0);
+                manifest_strict = manifest_route != nullptr && manifest_route->strict;
+                manifest_mode = manifest_route != nullptr;
+            } catch (const std::exception &) {
+                // Exception during manifest resolution - treat as no manifest
+                manifest_mode = false;
+            }
 
             if (manifest_mode) {
                 if (manifest_route->force_cpu || !manifest_route->valid || manifest_route->pipeline == nullptr) {
