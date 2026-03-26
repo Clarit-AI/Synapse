@@ -39,25 +39,48 @@ int main() {
         }
     });
 
+    t.test("generated rule names sort numerically and set precedence", [&](testing & tc) {
+        common_hybrid_manifest::manifest manifest;
+        manifest.profile = "dense-balanced";
+        manifest.routes = {
+            {.name = "rule-10", .match = "c", .target = "cpu"},
+            {.name = "rule-2", .match = "b", .target = "cpu"},
+            {.name = "rule-1", .match = "a", .target = "cpu"},
+        };
+
+        const auto plan = common_hybrid_manifest::resolve_plan(manifest);
+
+        tc.assert_equal(std::string("rule-1"), plan.entries.at(0).name);
+        tc.assert_equal(std::string("rule-2"), plan.entries.at(1).name);
+        tc.assert_equal(std::string("rule-10"), plan.entries.at(2).name);
+        tc.assert_equal(1, plan.entries.at(0).precedence);
+        tc.assert_equal(2, plan.entries.at(1).precedence);
+        tc.assert_equal(3, plan.entries.at(2).precedence);
+    });
+
     t.test("default sidecar path appends .hybrid.json", [&](testing & tc) {
         const auto path = common_hybrid_manifest::default_manifest_path("/tmp/model.gguf");
         tc.assert_equal("/tmp/model.gguf.hybrid.json", path);
     });
 
     t.test("invalid fixtures fail loudly", [&](const testing &) {
-        const std::vector<std::string> files = {
-            base + "invalid/bad-pipeline.json",
-            base + "invalid/bad-quant-allow.json",
-            base + "invalid/bad-shape.json",
-            base + "invalid/bad-profile.json",
+        const std::vector<std::pair<std::string, std::string>> files = {
+            {base + "invalid/bad-pipeline.json", "pipeline"},
+            {base + "invalid/bad-quant-allow.json", "quant"},
+            {base + "invalid/bad-shape.json", "shape"},
+            {base + "invalid/bad-profile.json", "profile"},
         };
 
-        for (const auto & file : files) {
+        for (const auto & [file, expected_message] : files) {
             bool threw = false;
             try {
                 (void) common_hybrid_manifest::load_manifest(file);
-            } catch (const std::exception &) {
+            } catch (const std::exception & e) {
                 threw = true;
+                const std::string message = string_lower(e.what());
+                if (message.find(expected_message) == std::string::npos) {
+                    throw std::runtime_error("unexpected validation error for " + file + ": " + e.what());
+                }
             }
             if (!threw) {
                 throw std::runtime_error("expected invalid fixture to fail: " + file);

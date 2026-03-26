@@ -2,7 +2,7 @@
 
 You are working in the repository at:
 
-`/Users/bbrenner/Documents/Scripting Projects/PrepperTech/rockchip-dev/edgeai-llama.cpp`
+`<repository-root>/edgeai-llama.cpp`
 
 ## Context
 - Phase 1 manifest routing is merged.

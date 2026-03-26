@@ -2,6 +2,8 @@
 
 This file contains specialized prompts for on-device ROCK 5 / RK3588 sessions where runtime validation matters more than desktop-only code plumbing.
 
+> Replace `<REPO_PATH>` below with your local clone path when running an on-device session.
+
 Use the section that matches the session goal.
 
 ---
@@ -10,7 +12,7 @@ Use the section that matches the session goal.
 
 You are running on or against a ROCK 5 / RK3588 environment for the repository:
 
-`/Users/bbrenner/Documents/Scripting Projects/PrepperTech/rockchip-dev/edgeai-llama.cpp`
+`<REPO_PATH>/edgeai-llama.cpp`
 
 ### Goal
 Validate that the current branch builds and runs correctly on the target device before deeper hybrid experiments begin.
@@ -46,7 +48,7 @@ Validate that the current branch builds and runs correctly on the target device 
 
 You are running on or against a ROCK 5 / RK3588 environment for the repository:
 
-`/Users/bbrenner/Documents/Scripting Projects/PrepperTech/rockchip-dev/edgeai-llama.cpp`
+`<REPO_PATH>/edgeai-llama.cpp`
 
 ### Goal
 Benchmark and compare CPU-only, legacy NPU, and manifest-driven hybrid execution on real hardware.
@@ -81,7 +83,7 @@ Benchmark and compare CPU-only, legacy NPU, and manifest-driven hybrid execution
 
 You are running on or against a ROCK 5 / RK3588 environment for the repository:
 
-`/Users/bbrenner/Documents/Scripting Projects/PrepperTech/rockchip-dev/edgeai-llama.cpp`
+`<REPO_PATH>/edgeai-llama.cpp`
 
 ### Goal
 Tune manifest rules based on measured RK3588 behavior.
@@ -112,7 +114,7 @@ Tune manifest rules based on measured RK3588 behavior.
 
 You are running on or against a ROCK 5 / RK3588 environment for the repository:
 
-`/Users/bbrenner/Documents/Scripting Projects/PrepperTech/rockchip-dev/edgeai-llama.cpp`
+`<REPO_PATH>/edgeai-llama.cpp`
 
 ### Goal
 Audit strict-mode behavior and fallback correctness on real hardware.
@@ -139,7 +141,7 @@ Audit strict-mode behavior and fallback correctness on real hardware.
 
 You are running on or against a ROCK 5 / RK3588 environment for the repository:
 
-`/Users/bbrenner/Documents/Scripting Projects/PrepperTech/rockchip-dev/edgeai-llama.cpp`
+`<REPO_PATH>/edgeai-llama.cpp`
 
 ### Goal
 Decide whether the project is ready to advance to the next roadmap phase.

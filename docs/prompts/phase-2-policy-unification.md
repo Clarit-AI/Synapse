@@ -2,7 +2,7 @@
 
 You are working in the repository at:
 
-`/Users/bbrenner/Documents/Scripting Projects/PrepperTech/rockchip-dev/edgeai-llama.cpp`
+`<repository-root>/edgeai-llama.cpp`
 
 ## Context
 - This project is a fork combining ik-llama.cpp and rk-llama.cpp work.

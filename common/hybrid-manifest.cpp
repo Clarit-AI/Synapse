@@ -6,11 +6,12 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <regex>
 #include <set>
+#include <string_view>
 #include <stdexcept>
-#include <unordered_set>
 
 using json = nlohmann::ordered_json;
 
@@ -50,8 +51,8 @@ const std::set<std::string> & npu_compatible_quants() {
 }
 
 bool file_exists(const std::string & path) {
-    std::ifstream file(path);
-    return file.good();
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
 }
 
 void validate_positive_divisor(int value, const std::string & key, const std::string & rule_name) {
@@ -77,20 +78,49 @@ void validate_quant_allow(const route_rule & rule) {
         return;
     }
 
-    bool has_supported_quant = false;
     for (const auto & quant : rule.quant_allow) {
-        if (npu_compatible_quants().count(string_lower(quant)) > 0) {
-            has_supported_quant = true;
-            break;
+        if (rule.target != TARGET_CPU && npu_compatible_quants().count(string_lower(quant)) == 0) {
+            throw std::runtime_error(format(
+                "hybrid manifest rule '%s' has incompatible quant allowlist for target '%s'",
+                rule.name.c_str(),
+                rule.target.c_str()));
+        }
+    }
+}
+
+std::optional<int> parse_generated_rule_number(std::string_view name) {
+    constexpr std::string_view prefix = "rule-";
+    if (!string_starts_with(std::string(name), std::string(prefix))) {
+        return std::nullopt;
+    }
+
+    const std::string_view suffix = name.substr(prefix.size());
+    if (suffix.empty()) {
+        return std::nullopt;
+    }
+    for (char c : suffix) {
+        if (c < '0' || c > '9') {
+            return std::nullopt;
         }
     }
 
-    if (rule.target != TARGET_CPU && !has_supported_quant) {
-        throw std::runtime_error(format(
-            "hybrid manifest rule '%s' has incompatible quant allowlist for target '%s'",
-            rule.name.c_str(),
-            rule.target.c_str()));
+    return std::stoi(std::string(suffix));
+}
+
+bool plan_entry_less(const plan_entry & lhs, const plan_entry & rhs) {
+    const auto lhs_num = parse_generated_rule_number(lhs.name);
+    const auto rhs_num = parse_generated_rule_number(rhs.name);
+
+    if (lhs_num.has_value() && rhs_num.has_value() && lhs_num.value() != rhs_num.value()) {
+        return lhs_num.value() < rhs_num.value();
     }
+    if (lhs_num.has_value() != rhs_num.has_value()) {
+        return lhs_num.has_value();
+    }
+    if (lhs.name != rhs.name) {
+        return lhs.name < rhs.name;
+    }
+    return lhs.match < rhs.match;
 }
 
 route_rule parse_route_rule(const json & item, int index) {
@@ -219,9 +249,10 @@ plan resolve_plan(const manifest & manifest_data) {
         resolved_plan.entries.push_back(entry);
     }
 
-    std::stable_sort(resolved_plan.entries.begin(), resolved_plan.entries.end(), [](const plan_entry & lhs, const plan_entry & rhs) {
-        return lhs.name < rhs.name;
-    });
+    std::stable_sort(resolved_plan.entries.begin(), resolved_plan.entries.end(), plan_entry_less);
+    for (size_t i = 0; i < resolved_plan.entries.size(); ++i) {
+        resolved_plan.entries[i].precedence = int(i) + 1;
+    }
 
     return resolved_plan;
 }
