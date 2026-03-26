@@ -1364,7 +1364,6 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
         for (; ik >=0 && last_row_mask[ik] != 0; ik -= k_step);
         ik += k_step;
         for (int k1 = 0; k1 < ik/k_step; ++k1) {
-            auto block_mask = (const uint16_t *)mr;
 #ifdef __aarch64__
             KQHelper::multiply_mask_kq(kh, Dk, stride_m, q_f16, mr, fms);
 #else
@@ -2248,4 +2247,3 @@ IQK_FA_CASE(iqk_fa_96_96);
 IQK_FA_CASE(iqk_fa_64_64);
 
 #endif
-
