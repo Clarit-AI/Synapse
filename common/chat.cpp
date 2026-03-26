@@ -50,6 +50,20 @@ static std::string string_diff(const std::string & last, const std::string & cur
     return current.substr(last.size());
 }
 
+static size_t string_hash(const std::string & value) {
+    return std::hash<std::string>{}(value);
+}
+
+static std::string redacted_preview(const std::string & value, size_t max_chars = 32) {
+    if (value.empty()) {
+        return "<empty>";
+    }
+    if (value.size() <= max_chars) {
+        return value;
+    }
+    return value.substr(0, max_chars) + "...";
+}
+
 static bool has_content_or_tool_calls(const common_chat_msg & msg) {
     return !msg.content.empty() || !msg.tool_calls.empty();
 }
@@ -569,10 +583,15 @@ std::string common_chat_format_single(
     // format chat with new_msg
     inputs.add_generation_prompt = add_ass;
     auto fmt_new_msg = common_chat_templates_apply(tmpls, inputs).prompt;
-    if (fmt_new_msg.size() < fmt_past_msg.size()) {
-        LOG_ERR("============================================ Oops: new message is of length %zu, past message is %zu\n", fmt_new_msg.size(), fmt_past_msg.size());
+    if (fmt_new_msg.size() < fmt_past_msg.size() || !string_starts_with(fmt_new_msg, fmt_past_msg)) {
+        LOG_ERR("Failed to apply chat template: new_len=%zu new_hash=%zu new_preview=<%s>\n",
+                fmt_new_msg.size(), string_hash(fmt_new_msg), redacted_preview(fmt_new_msg).c_str());
+        LOG_ERR("Failed to apply chat template: past_len=%zu past_hash=%zu past_preview=<%s>\n",
+                fmt_past_msg.size(), string_hash(fmt_past_msg), redacted_preview(fmt_past_msg).c_str());
+#ifdef DEBUG_VERBOSE
         LOG_ERR("=== past message: <%s>\n", fmt_past_msg.c_str());
         LOG_ERR("=== new  message: <%s>\n", fmt_new_msg.c_str());
+#endif
         throw std::runtime_error("Failed to apply chat template");
     }
     // get the diff part

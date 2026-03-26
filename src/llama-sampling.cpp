@@ -728,18 +728,26 @@ llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama
     if (iter == probs.end()) {
         LLAMA_LOG_ERROR("=============================== Failed to sample token\n");
         std::ofstream out("probabilities.txt");
-        out << "candidates->size: " << candidates->size << std::endl;
-        out << "max  = " << max << std::endl;
-        out << "sump = " << sump << std::endl;
-        out << "r    = " << r << std::endl;
-        out << "probabilities:\n";
-        for (int j = 0; j < candidates->size; ++j) {
-            out << j << "  " << candidates->data[j].id << "  " << candidates->data[j].logit << "  " << probs[j] << std::endl;
+        bool wrote_dump = out.is_open();
+        if (wrote_dump) {
+            out << "candidates->size: " << candidates->size << std::endl;
+            out << "max  = " << max << std::endl;
+            out << "sump = " << sump << std::endl;
+            out << "r    = " << r << std::endl;
+            out << "probabilities:\n";
+            for (int j = 0; j < candidates->size; ++j) {
+                out << j << "  " << candidates->data[j].id << "  " << candidates->data[j].logit << "  " << probs[j] << std::endl;
+            }
+            out.flush();
+            wrote_dump = out.good();
+            out.close();
         }
-        out.flush();
-        out.close();
-        LLAMA_LOG_ERROR("Data has been stored in probabilities.txt\n");
-        LLAMA_LOG_ERROR("Create an issue with full log and attach probabilities.txt to the issue\n");
+        if (wrote_dump) {
+            LLAMA_LOG_ERROR("Data has been stored in probabilities.txt\n");
+            LLAMA_LOG_ERROR("Create an issue with full log and attach probabilities.txt to the issue\n");
+        } else {
+            LLAMA_LOG_ERROR("Failed to write probabilities.txt; dump is not available\n");
+        }
         LLAMA_LOG_ERROR("\n\nCrashing now\n");
         GGML_ABORT("Fatal error");
     }
