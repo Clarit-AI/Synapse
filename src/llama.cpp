@@ -2841,7 +2841,9 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
     try {
         llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
-                params.kv_overrides, params.tensor_buft_overrides);
+                params.kv_overrides, params.tensor_buft_overrides,
+                params.hybrid_manifest, params.hybrid_profile,
+                params.hybrid_dry_run, params.hybrid_dump_plan, params.hybrid_strict);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -2890,6 +2892,14 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.n_gpu_layers = 0;
         }
 #endif
+
+        const bool effective_dry_run = params.dry_run || params.hybrid_dry_run;
+
+        if (params.hybrid_dry_run) {
+            LLAMA_LOG_INFO("%s: hybrid dry-run mode - skipping tensor loading\n", __func__);
+            model.dry_run = true;
+            return 0;
+        }
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
@@ -4897,6 +4907,11 @@ struct llama_model_params llama_model_default_params() {
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_buft_overrides       =*/ nullptr,
+        /*.hybrid_manifest             =*/ nullptr,
+        /*.hybrid_profile              =*/ nullptr,
+        /*.hybrid_dry_run              =*/ false,
+        /*.hybrid_dump_plan            =*/ false,
+        /*.hybrid_strict               =*/ false,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,
@@ -9088,4 +9103,3 @@ void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_of
 void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state) {
     ctx->draft_input_hidden_state = hidden_state;
 }
-
