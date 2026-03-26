@@ -244,9 +244,9 @@ bool server_sent_anthropic_event(httplib::DataSink& sink, const json& data);
 json oaicompat_chat_params_parse(const json& body);
 
 struct server_chat_params {
-    bool use_jinja;
-    bool use_peg;
-    bool prefill_assistant;
+    bool use_jinja = false;
+    bool use_peg = false;
+    bool prefill_assistant = false;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs;
     common_chat_templates_ptr  tmpls;

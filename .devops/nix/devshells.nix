@@ -30,7 +30,7 @@
                 numpy
                 sentencepiece
                 tiktoken
-                torchWithoutCuda
+                torch
                 transformers
               ];
               shellHook = ''
