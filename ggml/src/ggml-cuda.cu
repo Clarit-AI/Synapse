@@ -1235,6 +1235,7 @@ static ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_interface 
 GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_type(const float * /*tensor_split*/) {
     static ggml_backend_buffer_type buft {
         /* .iface   = */ ggml_backend_cuda_split_buffer_type_interface,
+        /* .device  = */ nullptr,
         /* .context = */ new ggml_backend_cuda_split_buffer_type_context{}, //{tensor_split_arr},
     };
     return &buft;
