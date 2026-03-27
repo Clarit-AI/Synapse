@@ -1,8 +1,9 @@
 # Master Roadmap Orchestrator Prompt
 
-You are working in the repository at:
+You are working in the current repository root (the repository's working directory).
 
-`<repository-root>/edgeai-llama.cpp`
+Infer the repository root from the current working directory instead of assuming a
+fixed checkout name such as `edgeai-llama.cpp`.
 
 ## Context
 - This project is a fork combining ik-llama.cpp and rk-llama.cpp work.
@@ -26,9 +27,9 @@ Select the next phase using these rules.
 
 ### Choose Phase 2 if any of the following are true
 - `src/llama-model-loader.cpp` still contains a separate manifest parser/resolver implementation that duplicates `common/hybrid-manifest.*`
-- deterministic test coverage for hybrid plan output is missing or incomplete (check: `tests/test-hybrid-*.cpp`)
-- manifest fixtures for valid/invalid routing are missing or incomplete (check: `tests/fixtures/hybrid-manifest/**/*.json`)
-- strict-mode validation coverage is missing
+- deterministic hybrid plan output coverage is missing or incomplete (check: `tests/test-hybrid-*.cpp` for a `plan dump is deterministic` assertion)
+- manifest fixtures for valid/invalid routing are missing or incomplete (check: `tests/fixtures/hybrid-manifest/**/*.json`, including explicit `expected-pass` / `expected-fail` fixtures)
+- strict-mode validation coverage is missing (check: `tests/test-hybrid-*.cpp` for a `strict-mode validation` assertion and matching strict-mode fixtures)
 
 ### Choose Phase 3 if all of the following are true
 - phase 2 unification appears complete

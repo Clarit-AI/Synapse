@@ -13,6 +13,7 @@ int main() {
             base + "examples/dense-balanced.json",
             base + "examples/dense-cpu-only.json",
             base + "examples/moe-balanced.json",
+            base + "examples/strict-mode-validation-expected-pass.json",
         };
 
         for (const auto & file : files) {
@@ -37,6 +38,32 @@ int main() {
         if (dump_a != dump_b) {
             throw std::runtime_error("expected identical plan dumps across repeated resolution");
         }
+    });
+
+    t.test("strict-mode validation", [&](testing & tc) {
+        const auto strict_manifest = common_hybrid_manifest::load_manifest(
+            base + "examples/strict-mode-validation-expected-pass.json");
+        const auto strict_plan = common_hybrid_manifest::resolve_plan(strict_manifest);
+        const auto strict_dump = common_hybrid_manifest::plan_to_json(strict_plan);
+
+        tc.assert_true("expected strict fixture to preserve strict=true on the manifest", strict_manifest.strict);
+        tc.assert_true("expected strict fixture to preserve strict=true in the resolved plan", strict_plan.strict);
+        tc.assert_equal("expected deterministic strict fixture profile", std::string("dense-balanced"), strict_plan.profile);
+        tc.assert_equal("expected strict fixture route count", size_t(2), strict_plan.entries.size());
+        tc.assert_equal("expected strict fixture pipeline", std::string("INT8_STANDARD"), strict_plan.entries.at(1).pipeline);
+        tc.assert_true("expected serialized strict plan to include strict=true", strict_dump.value("strict", false));
+
+        bool threw = false;
+        try {
+            (void) common_hybrid_manifest::load_manifest(base + "invalid/strict-mode-validation-expected-fail.json");
+        } catch (const std::exception & e) {
+            threw = true;
+            const std::string message = string_lower(e.what());
+            tc.assert_true("expected strict-mode failure message to mention pipeline",
+                message.find("pipeline") != std::string::npos);
+        }
+
+        tc.assert_true("expected invalid strict-mode fixture to fail loudly", threw);
     });
 
     t.test("generated rule names sort numerically and set precedence", [&](testing & tc) {
@@ -69,6 +96,7 @@ int main() {
             {base + "invalid/bad-quant-allow.json", "quant"},
             {base + "invalid/bad-shape.json", "shape"},
             {base + "invalid/bad-profile.json", "profile"},
+            {base + "invalid/strict-mode-validation-expected-fail.json", "pipeline"},
         };
 
         for (const auto & [file, expected_message] : files) {

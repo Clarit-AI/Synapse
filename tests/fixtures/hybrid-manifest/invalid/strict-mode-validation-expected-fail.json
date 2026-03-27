@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "profile": "dense-balanced",
+  "strict": true,
+  "routes": [
+    {
+      "name": "strict-fail-unknown-pipeline",
+      "match": "^blk\\.[0-9]+\\.ffn_",
+      "target": "default",
+      "pipeline": "NOT_A_REAL_PIPELINE"
+    }
+  ]
+}
