@@ -27,7 +27,7 @@ Select the next phase using these rules.
 ### Choose Phase 2 if any of the following are true
 - `src/llama-model-loader.cpp` still contains a separate manifest parser/resolver implementation that duplicates `common/hybrid-manifest.*`
 - deterministic test coverage for hybrid plan output is missing or incomplete (check: `tests/test-hybrid-*.cpp`)
-- manifest fixtures for valid/invalid routing are missing or incomplete (check: `fixtures/manifest-*.json`)
+- manifest fixtures for valid/invalid routing are missing or incomplete (check: `tests/fixtures/hybrid-manifest/**/*.json`)
 - strict-mode validation coverage is missing
 
 ### Choose Phase 3 if all of the following are true
