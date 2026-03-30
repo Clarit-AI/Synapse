@@ -58,9 +58,6 @@ static __device__ void quantize_f32_q4_0_block(const float * __restrict__ x, blo
         y->qs[j]  = xi0;
         y->qs[j] |= xi1 << 4;
     }
-    if (sumq2 > 0) {
-        y->d = sumqx/sumq2;
-    }
 }
 
 static __device__ void quantize_f32_q4_1_block(const float * __restrict__ x, block_q4_1 * __restrict__ y) {
