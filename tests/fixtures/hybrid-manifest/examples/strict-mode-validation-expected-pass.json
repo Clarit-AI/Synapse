@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "profile": "dense-balanced",
+  "strict": true,
+  "npu_pattern": ["INT8_STANDARD"],
+  "routes": [
+    {
+      "name": "strict-pass-cpu",
+      "match": "^blk\\.[0-9]+\\.attn_",
+      "target": "cpu"
+    },
+    {
+      "name": "strict-pass-default",
+      "match": "^blk\\.[0-9]+\\.ffn_",
+      "target": "default",
+      "pipeline": "INT8_STANDARD",
+      "quant_allow": ["q8_0"],
+      "shape": {
+        "n_divisible_by": 32
+      }
+    }
+  ]
+}

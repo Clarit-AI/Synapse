@@ -46,6 +46,15 @@ Options:
 EOF
 }
 
+require_option_value() {
+    local option=$1
+    shift
+    if [[ $# -lt 1 || -z "${1:-}" ]]; then
+        echo "Error: ${option} requires a value" >&2
+        exit 1
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)
@@ -65,27 +74,33 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --sync-branch)
-            SYNC_BRANCH="$2"
+            require_option_value "$1" "${2:-}"
+            SYNC_BRANCH="${2:-}"
             shift 2
             ;;
         --main-branch)
-            MAIN_BRANCH="$2"
+            require_option_value "$1" "${2:-}"
+            MAIN_BRANCH="${2:-}"
             shift 2
             ;;
         --ik-remote)
-            IK_REMOTE="$2"
+            require_option_value "$1" "${2:-}"
+            IK_REMOTE="${2:-}"
             shift 2
             ;;
         --ik-branch)
-            IK_BRANCH="$2"
+            require_option_value "$1" "${2:-}"
+            IK_BRANCH="${2:-}"
             shift 2
             ;;
         --rk-remote)
-            RK_REMOTE="$2"
+            require_option_value "$1" "${2:-}"
+            RK_REMOTE="${2:-}"
             shift 2
             ;;
         --rk-branch)
-            RK_BRANCH="$2"
+            require_option_value "$1" "${2:-}"
+            RK_BRANCH="${2:-}"
             shift 2
             ;;
         -h|--help)

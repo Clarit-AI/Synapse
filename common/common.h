@@ -407,9 +407,9 @@ struct gpt_params {
     int reasoning_budget      = -1;
     bool prefill_assistant    = true;
     bool dry_run              = false;
-    bool hybrid_dry_run       = false; // resolve hybrid manifest and stop before tensor loading
-    bool hybrid_dump_plan     = false; // dump resolved hybrid tensor plan during model load
-    bool hybrid_strict        = false; // fail on unsupported hybrid manifest rules instead of falling back
+    bool        hybrid_dry_run   = false; // resolve hybrid manifest and stop before tensor loading
+    std::string hybrid_dump_plan = "";    // output path for resolved hybrid tensor plan (empty = disabled)
+    bool        hybrid_strict    = false; // fail on unsupported hybrid manifest rules instead of falling back
 
     std::vector<std::string> api_keys;
 
