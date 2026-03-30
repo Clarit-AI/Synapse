@@ -622,7 +622,6 @@ void maybe_apply_hybrid_manifest(gpt_params & params) {
         if (!out) {
             throw std::runtime_error(format("failed to write hybrid plan to '%s'", params.hybrid_dump_plan.c_str()));
         }
-        out << plan_json.dump(2) << "\n";
     }
 
     if (params.hybrid_dry_run) {
@@ -1554,8 +1553,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.has_mtp = true;
         return true;
     }
-        CHECK_ARG
-        params.hybrid_dump_plan = argv[i];
+    if (arg == "-no-mtp" || arg == "--no-multi-token-prediction") {
         params.has_mtp = false;
         return true;
     }
@@ -1842,8 +1840,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-        CHECK_ARG
-        params.hybrid_dump_plan = argv[i];
+    if (arg == "-h" || arg == "--help" || arg == "--usage"  ) {
         params.usage = true;
         return true;
     }
@@ -1871,7 +1868,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--hybrid-dump-plan") {
-        params.hybrid_dump_plan = true;
+        CHECK_ARG
+        params.hybrid_dump_plan = argv[i];
         return true;
     }
     if (arg == "--hybrid-strict") {
@@ -3452,6 +3450,8 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
 
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
+    }
+
     mparams.hybrid_dump_plan = params.hybrid_dump_plan.empty() ? nullptr : params.hybrid_dump_plan.c_str();
     mparams.mla             = params.mla_attn;
     mparams.dry_run         = params.dry_run;
@@ -3482,7 +3482,6 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.mtp             = params.has_mtp;
     mparams.flash_attn      = params.flash_attn;
     mparams.hybrid_dry_run  = params.hybrid_dry_run;
-    mparams.hybrid_dump_plan = params.hybrid_dump_plan;
     mparams.hybrid_strict   = params.hybrid_strict;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
@@ -4438,8 +4437,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "debug: false\n");
 #else
     fprintf(stream, "debug: true\n");
-    fprintf(stream, "hybrid_dump_plan: %s # default: none\n", params.hybrid_dump_plan.empty() ? "none" : params.hybrid_dump_plan.c_str());
-
+#endif // NDEBUG
     fprintf(stream, "model_desc: %s\n", model_desc);
     fprintf(stream, "n_vocab: %d  # output size of the final layer, 32001 for some models\n", llama_n_vocab(llama_get_model(lctx)));
 
@@ -4468,7 +4466,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "hybrid_manifest: %s # default: none\n", params.hybrid_manifest.empty() ? "none" : params.hybrid_manifest.c_str());
     fprintf(stream, "hybrid_profile: %s # default: none\n", params.hybrid_profile.empty() ? "none" : params.hybrid_profile.c_str());
     fprintf(stream, "hybrid_dry_run: %s # default: false\n", params.hybrid_dry_run ? "true" : "false");
-    fprintf(stream, "hybrid_dump_plan: %s # default: false\n", params.hybrid_dump_plan ? "true" : "false");
+    fprintf(stream, "hybrid_dump_plan: %s # default: none\n", params.hybrid_dump_plan.empty() ? "none" : params.hybrid_dump_plan.c_str());
     fprintf(stream, "hybrid_strict: %s # default: false\n", params.hybrid_strict ? "true" : "false");
     fprintf(stream, "dry_allowed_length: %d # default: 2\n", sparams.dry_allowed_length);
     fprintf(stream, "dry_base: %.2f # default: 1.75\n", sparams.dry_base);
