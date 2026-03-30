@@ -2,15 +2,15 @@
 
 ## Scope
 
-This pass patched only [`src/llama.cpp`](/home/radxa/edgeai-llama.cpp-phase3/src/llama.cpp) and preserved existing local edits in:
+This pass patched only [`src/llama.cpp`](../../src/llama.cpp) and preserved existing local edits in:
 
-- [`ggml/src/CMakeLists.txt`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/CMakeLists.txt)
-- [`ggml/src/ggml-backend.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-backend.cpp)
-- [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
+- [`ggml/src/CMakeLists.txt`](../../ggml/src/CMakeLists.txt)
+- [`ggml/src/ggml-backend.cpp`](../../ggml/src/ggml-backend.cpp)
+- [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
 
 ## What Changed
 
-Patched [`src/llama.cpp`](/home/radxa/edgeai-llama.cpp-phase3/src/llama.cpp) to wire `GGML_USE_RKNPU2` into the existing offload path:
+Patched [`src/llama.cpp`](../../src/llama.cpp) to wire `GGML_USE_RKNPU2` into the existing offload path:
 
 - `llama_supports_gpu_offload()`
 - `llama_get_device_count()`
@@ -127,9 +127,9 @@ Conclusion:
 
 If continuing past the `src/llama.cpp`-only patch, inspect the RKNPU allocation and buffer-sizing path next, starting with:
 
-- [`ggml/src/ggml-rknpu2/rknpu2-allocation.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/rknpu2-allocation.cpp)
-- [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
-- model buffer assignment/allocation in [`src/llama.cpp`](/home/radxa/edgeai-llama.cpp-phase3/src/llama.cpp)
+- [`ggml/src/ggml-rknpu2/rknpu2-allocation.cpp`](../../ggml/src/ggml-rknpu2/rknpu2-allocation.cpp)
+- [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
+- model buffer assignment/allocation in [`src/llama.cpp`](../../src/llama.cpp)
 
 Likely question:
 
@@ -146,7 +146,7 @@ One parser constraint surfaced immediately:
 
 ### Experiment 1: Late FFN Only
 
-Created [`examples/hybrid-manifests/dense-q8-late-ffn.json`](/home/radxa/edgeai-llama.cpp-phase3/examples/hybrid-manifests/dense-q8-late-ffn.json).
+Created [`examples/hybrid-manifests/dense-q8-late-ffn.json`](../../examples/hybrid-manifests/dense-q8-late-ffn.json).
 
 Diff versus the broad balanced route:
 
@@ -185,7 +185,7 @@ Result:
 
 ### Experiment 2: Tail `ffn_down` Only
 
-Created [`examples/hybrid-manifests/dense-q8-tail-down.json`](/home/radxa/edgeai-llama.cpp-phase3/examples/hybrid-manifests/dense-q8-tail-down.json).
+Created [`examples/hybrid-manifests/dense-q8-tail-down.json`](../../examples/hybrid-manifests/dense-q8-tail-down.json).
 
 Diff versus the broad balanced route:
 
@@ -258,9 +258,9 @@ env HYBRID_MANIFEST=./examples/hybrid-manifests/dense-q8-tail-down.json \
 
 Added narrow logging in:
 
-- [`src/llama.cpp`](/home/radxa/edgeai-llama.cpp-phase3/src/llama.cpp)
-- [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
-- [`ggml/src/ggml-rknpu2/rknpu2-allocation.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/rknpu2-allocation.cpp)
+- [`src/llama.cpp`](../../src/llama.cpp)
+- [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
+- [`ggml/src/ggml-rknpu2/rknpu2-allocation.cpp`](../../ggml/src/ggml-rknpu2/rknpu2-allocation.cpp)
 
 The failing log now shows:
 
@@ -280,9 +280,9 @@ The top-level model buffer is not segmented by tensor.
 
 Evidence:
 
-- [`ggml_backend_alloc_ctx_tensors_from_buft()`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-alloc.c) aggregates all tensors in the RKNPU context into one buffer unless the backend advertises a `max_size`
+- [`ggml_backend_alloc_ctx_tensors_from_buft()`](../../ggml/src/ggml-alloc.c) aggregates all tensors in the RKNPU context into one buffer unless the backend advertises a `max_size`
 - the RKNPU backend does not provide `get_max_size`
-- segmentation in [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) only affects per-tensor packing and per-op `rknn_create_mem_from_fd()` views, not the top-level DMA heap allocation
+- segmentation in [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) only affects per-tensor packing and per-op `rknn_create_mem_from_fd()` views, not the top-level DMA heap allocation
 
 ### Standalone DMA Heap Probe
 
@@ -330,7 +330,7 @@ This matches the direct probe and explains the CMA allocation failures.
 
 That output is not real memory telemetry.
 
-[`ggml_backend_rknpu_device_get_memory()`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) currently hardcodes:
+[`ggml_backend_rknpu_device_get_memory()`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) currently hardcodes:
 
 - `*free = 0`
 - `*total = 0`
@@ -339,7 +339,7 @@ So `0 MiB free` is just an unimplemented reporting stub.
 
 ### Minimal Patch Tried
 
-Patched [`ggml/src/ggml-rknpu2/rknpu2-allocation.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/rknpu2-allocation.cpp) so allocator fallback is attempted not only when `/dev/dma_heap/cma` cannot be opened, but also when CMA `DMA_HEAP_IOCTL_ALLOC` fails.
+Patched [`ggml/src/ggml-rknpu2/rknpu2-allocation.cpp`](../../ggml/src/ggml-rknpu2/rknpu2-allocation.cpp) so allocator fallback is attempted not only when `/dev/dma_heap/cma` cannot be opened, but also when CMA `DMA_HEAP_IOCTL_ALLOC` fails.
 
 Result with the same `dense-q8-tail-down` repro:
 
@@ -438,7 +438,7 @@ It happened earlier during backend classification in `llama_init_from_model()` w
 
 Root cause:
 
-- the RKNPU backend object in [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) was still being created with:
+- the RKNPU backend object in [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) was still being created with:
   - `.guid = {0}`
 - later, scheduler setup calls `ggml_backend_is_cpu(backend)`
 - `ggml_backend_is_cpu()` calls `ggml_guid_matches(backend->guid, ggml_backend_cpu_guid())`
@@ -452,7 +452,7 @@ This means:
 
 ### Minimal Fix
 
-Patched [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) to add a real static backend GUID and use it when constructing the RKNPU backend.
+Patched [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) to add a real static backend GUID and use it when constructing the RKNPU backend.
 
 ### Result After Fix
 
@@ -503,8 +503,8 @@ At this point, for the small `dense-q8-tail-down` profile:
 
 Ran a three-profile ladder with the two fixes kept together:
 
-- [`ggml/src/ggml-rknpu2/rknpu2-allocation.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/rknpu2-allocation.cpp)
-- [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
+- [`ggml/src/ggml-rknpu2/rknpu2-allocation.cpp`](../../ggml/src/ggml-rknpu2/rknpu2-allocation.cpp)
+- [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
 
 Command pattern:
 
@@ -525,7 +525,7 @@ env HYBRID_MANIFEST=./examples/hybrid-manifests/<manifest>.json \
 
 Manifest:
 
-- [`examples/hybrid-manifests/dense-q8-tail-down.json`](/home/radxa/edgeai-llama.cpp-phase3/examples/hybrid-manifests/dense-q8-tail-down.json)
+- [`examples/hybrid-manifests/dense-q8-tail-down.json`](../../examples/hybrid-manifests/dense-q8-tail-down.json)
 
 Placement summary:
 
@@ -554,7 +554,7 @@ Timings:
 
 Manifest:
 
-- [`examples/hybrid-manifests/dense-q8-late-ffn.json`](/home/radxa/edgeai-llama.cpp-phase3/examples/hybrid-manifests/dense-q8-late-ffn.json)
+- [`examples/hybrid-manifests/dense-q8-late-ffn.json`](../../examples/hybrid-manifests/dense-q8-late-ffn.json)
 
 Placement summary:
 
@@ -575,7 +575,7 @@ Result:
 
 Observed failure:
 
-- abort in [`ggml_backend_rknpu_graph_compute()`](/home/radxa/edgeai-llama.cpp-phase3/ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
+- abort in [`ggml_backend_rknpu_graph_compute()`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp)
 - assertion:
   - `GGML_ASSERT(it != src0_buf_ctx->quantized_tensor_scales.end() && "Quantized scale not found") failed`
 
@@ -588,7 +588,7 @@ Interpretation:
 
 Manifest:
 
-- [`examples/hybrid-manifests/dense-balanced.json`](/home/radxa/edgeai-llama.cpp-phase3/examples/hybrid-manifests/dense-balanced.json)
+- [`examples/hybrid-manifests/dense-balanced.json`](../../examples/hybrid-manifests/dense-balanced.json)
 
 Placement summary:
 

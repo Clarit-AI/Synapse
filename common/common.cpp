@@ -506,6 +506,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_HYBRID_DUMP_PLAN", params.hybrid_dump_plan);
     get_env("LLAMA_ARG_HYBRID_STRICT",    params.hybrid_strict);
     get_env("HYBRID_MANIFEST",            params.hybrid_manifest);
+    get_env("HYBRID_PROFILE",             params.hybrid_profile);
     get_env("HYBRID_STRICT",              params.hybrid_strict);
     get_env("HYBRID_DRY_RUN",             params.hybrid_dry_run);
     get_env("HYBRID_DUMP_PLAN",           params.hybrid_dump_plan);

@@ -430,7 +430,7 @@ static size_t llama_get_device_count(const llama_model & model) {
     return ggml_backend_cann_get_device_count();
 #elif defined(GGML_USE_RKNPU2)
     ggml_backend_reg_t reg = ggml_backend_reg_by_name("RKNPU");
-    return reg != nullptr ? ggml_backend_reg_dev_count(reg) : 0;
+    count = reg != nullptr ? ggml_backend_reg_dev_count(reg) : 0;
 #endif
 #if defined(GGML_USE_RPC)
     count += model.rpc_servers.size();
