@@ -29,6 +29,8 @@
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_cpu_ops.h"
 
+#include <mutex>
+
 #define IK_PRINT_TIMING 0
 
 #ifdef GGML_USE_RPC
@@ -442,6 +444,7 @@ static size_t llama_get_device_count(const llama_model & model) {
 #if defined(GGML_USE_RKNPU2)
 static ggml_backend_buffer_type_t llama_default_buffer_type_rknpu(int device) {
     static std::vector<ggml_backend_buffer_type_t> cached_bufts;
+    static std::mutex cached_bufts_mutex;
 
     if (device < 0) {
         return nullptr;
@@ -456,6 +459,8 @@ static ggml_backend_buffer_type_t llama_default_buffer_type_rknpu(int device) {
     if ((size_t)device >= dev_count) {
         return nullptr;
     }
+
+    std::lock_guard<std::mutex> lock(cached_bufts_mutex);
 
     if (cached_bufts.size() < dev_count) {
         cached_bufts.resize(dev_count, nullptr);
@@ -2317,8 +2322,11 @@ static bool llm_load_tensors(
 
     size_t mem_margin  = fit_margin > 0 ? size_t(fit_margin)*1024*1024 : k_default_mem_margin;
 #if defined(GGML_USE_RKNPU2)
-    const bool hybrid_rknpu_load = ml.has_hybrid_npu_route() && !model.devices.empty() &&
-        striequals(ggml_backend_buft_name(llama_default_buffer_type_offload(model, model.devices.front())), "RKNPU");
+    const bool hybrid_rknpu_load = ml.has_hybrid_npu_route() &&
+        std::any_of(model.devices.begin(), model.devices.end(), [&](int device) {
+            ggml_backend_buffer_type_t buft = llama_default_buffer_type_offload(model, device);
+            return buft != nullptr && striequals(ggml_backend_buft_name(buft), "RKNPU");
+        });
 #else
     const bool hybrid_rknpu_load = false;
 #endif
@@ -2617,20 +2625,25 @@ static bool llm_load_tensors(
     } else {
         ggml_backend_buffer_type_t split_buft;
         if ((split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
-            split_buft = llama_default_buffer_type_split(model, model.devices[main_gpu]);
+            split_buft = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
+                llama_default_buffer_type_split(model, model.devices[main_gpu]);
             model.split_buft = split_buft;
         } else {
             // LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_LAYER in backends where it is not supported
-            split_buft = llama_default_buffer_type_offload(model, model.devices[main_gpu]);
+            split_buft = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
+                llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         }
         //auto buft_layer = llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         // assign the repeating layers
         for (int i = i_gpu_start; i < n_layer; ++i) {
-            auto buft_layer = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
+            auto buft_layer = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
+                llama_default_buffer_type_offload(model, model.default_layer_device[i]);
             if (split_mode == LLAMA_SPLIT_MODE_ATTN) {
                 int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count,
                         float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
-                model.buft_layer[i] = { split_buft, llama_default_buffer_type_offload(model, model.devices[layer_gpu]) };
+                ggml_backend_buffer_type_t attn_buft = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
+                    llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
+                model.buft_layer[i] = { split_buft, attn_buft };
                 LLAMA_LOG_INFO("Layer %d: assigning buft_layer to GPU %d\n", i, layer_gpu);
             } else {
                 model.buft_layer[i] = { split_buft, buft_layer };
