@@ -18,7 +18,7 @@ For experiment runs that use a manifest-driven route policy, export the policy m
 
 ```bash
 HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json \
-HYBRID_PROFILE=balanced \
+HYBRID_PROFILE=dense-balanced \
 HYBRID_STRICT=1 \
     ./build/bin/llama-bench -m models/your-model.gguf -g 99
 ```
@@ -38,7 +38,7 @@ For each target model, capture these three runs:
 
 # Manifest-driven hybrid policy
 HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json \
-HYBRID_PROFILE=balanced \
+HYBRID_PROFILE=dense-balanced \
     ./build/bin/llama-bench -m models/your-model.gguf -g 99
 ```
 
@@ -141,6 +141,14 @@ The NPU uses IOVA (I/O Virtual Address) space for DMA transfers. This space is l
    RKNN_SPLIT_FACTOR=2 ./build/bin/llama-cli -m model.gguf -ngl 99
    ```
 
+2a. **Bound persistent RKNN cache growth**:
+   ```bash
+   RKNPU_B_CACHE_SIZE=32 RKNPU_CTX_CACHE_SIZE=32 \
+       ./build/bin/llama-cli -m model.gguf -ngl 99
+   ```
+
+   Use this when repeated or broader hybrid runs consume RKNN/IOMMU space over time even after the initial buffer sizing problem is already under control.
+
 3. **Quantize to smaller format**:
    - FP16 → INT8 saves ~50% memory
    - INT8 → Q4_0 saves ~75% memory
@@ -149,6 +157,11 @@ The NPU uses IOVA (I/O Virtual Address) space for DMA transfers. This space is l
    ```bash
    -c 512  # instead of default 2048
    ```
+
+`RKNN_SPLIT_FACTOR` and the cache limits solve different issues:
+- `RKNN_SPLIT_FACTOR` does not shrink the top-level routed tensor allocation because the packed segments still sum back into one tensor-sized allocation.
+- `RKNN_SPLIT_FACTOR` only changes per-segment import and execution granularity once the backend is running.
+- `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE` are the right controls when repeated or broader routed runs need bounded persistent RKNN state.
 
 Performance Profiling
 ---------------------

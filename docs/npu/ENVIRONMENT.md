@@ -66,6 +66,48 @@ RKNN_SPLIT_FACTOR=4 ./build/bin/llama-cli -m large-model.gguf --n-gpu-layers 99
 
 **Performance Note:** Higher split factors add overhead from multiple DMA transfers. Use the minimum value that allows your model to load.
 
+RKNPU_B_CACHE_SIZE
+------------------
+
+Caps the number of cached B-matrix RKNN memory handles created through `rknn_create_mem_from_fd()`.
+
+| Value | Description |
+|-------|-------------|
+| `64` | Default, conservative bound |
+| Higher | Fewer cache misses, larger persistent RKNN/IOMMU footprint |
+| Lower | More aggressive reclamation, more handle churn |
+
+**When to Use:**
+- Broader hybrid runs slowly consume IOVA space across many unique routed tensors
+- Repeated inference stays stable only when cached weight-handle growth is bounded
+- You want to compare throughput vs persistent RKNN memory pressure
+
+**Example:**
+```bash
+RKNPU_B_CACHE_SIZE=32 ./build/bin/llama-cli -m model.gguf --n-gpu-layers 99
+```
+
+RKNPU_CTX_CACHE_SIZE
+--------------------
+
+Caps the number of cached RKNN matmul contexts created for unique `(M, K, N segment, core, matmul type)` combinations.
+
+| Value | Description |
+|-------|-------------|
+| `64` | Default, conservative bound |
+| Higher | Fewer matmul context recreations |
+| Lower | Smaller persistent RKNN context footprint |
+
+**Example:**
+```bash
+RKNPU_CTX_CACHE_SIZE=32 ./build/bin/llama-cli -m model.gguf --n-gpu-layers 99
+```
+
+**Important:** `RKNN_SPLIT_FACTOR` and the cache limits address different problems.
+- `RKNN_SPLIT_FACTOR` does not reduce the top-level routed tensor allocation because `ggml_backend_rknpu_buffer_type_get_alloc_size()` still sums the packed segments back into one tensor-sized allocation.
+- `RKNN_SPLIT_FACTOR` only reduces per-segment import and execution granularity once the backend is running.
+- `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE` are the knobs to use when you need to bound persistent RKNN state growth or reduce pressure from broader routed runs.
+
 HYBRID_PATTERN
 --------------
 
@@ -111,6 +153,8 @@ Complete Example
 export RKNN_DEVICE="RK3588"
 export RKNN_CORE_MASK="0x7"
 export RKNN_SPLIT_FACTOR="1"
+export RKNPU_B_CACHE_SIZE="64"
+export RKNPU_CTX_CACHE_SIZE="64"
 export HYBRID_PATTERN="FP16_STANDARD,INT8_STANDARD"
 
 ./build/bin/llama-cli \
@@ -138,4 +182,5 @@ Common Issues
 | "Device not found" | RKNN runtime not installed | Install librknnrt.so |
 | Only 1 core used | RKNN_CORE_MASK=0x1 | Set to 0x3 or 0x7 |
 | OOM errors | Split factor too low | Increase to 2 or 4 |
+| Repeated hybrid runs degrade or fail | RKNN caches keep growing | Lower `RKNPU_B_CACHE_SIZE` / `RKNPU_CTX_CACHE_SIZE` |
 | Slow inference | Model has IQK types | CPU handles these, use different quant |
