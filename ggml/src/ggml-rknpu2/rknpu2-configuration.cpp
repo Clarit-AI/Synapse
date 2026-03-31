@@ -19,6 +19,7 @@ using json = nlohmann::ordered_json;
 // --- Anonymous namespace for chip-specific packing functions ---
 
 namespace {
+using rknpu2_configuration::Rknpu2HybridRule;
 
 // Packing KxN FP16 (row-major: idx [k,n] -> k*N + n) into native RKNN for RK3588: (N/16, K/32, 16, 32)
 void pack_B_rk3588_fp16(
@@ -504,7 +505,7 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct
             route.fallback_reason = "manifest rule requests CPU";
             hybrid_route_cache.emplace(cache_key, route);
             if (hybrid_manifest_dump_plan) {
-                LLAMA_LOG_INFO("RKNPU2: manifest route %s -> CPU (%s, role=%s, layer=%d)\n",
+                LOG_INF("RKNPU2: manifest route %s -> CPU (%s, role=%s, layer=%d)\n",
                     name.c_str(), route.rule_name.c_str(), route.role.c_str(), route.layer_id);
             }
             return &hybrid_route_cache.find(cache_key)->second;
@@ -534,7 +535,7 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct
         route.pipeline = pipeline;
         hybrid_route_cache.emplace(cache_key, route);
         if (hybrid_manifest_dump_plan) {
-            LLAMA_LOG_INFO("RKNPU2: manifest route %s -> %s (%s, role=%s, layer=%d)\n",
+            LOG_INF("RKNPU2: manifest route %s -> %s (%s, role=%s, layer=%d)\n",
                 name.c_str(), route.pipeline_name.c_str(), route.rule_name.c_str(), route.role.c_str(), route.layer_id);
         }
         return &hybrid_route_cache.find(cache_key)->second;
@@ -548,7 +549,7 @@ void Rknpu2DeviceConfig::dump_hybrid_manifest_summary() const {
         return;
     }
 
-    LLAMA_LOG_INFO("RKNPU2: hybrid manifest path=%s profile=%s default_policy=%s rules=%zu strict=%d dump_plan=%d\n",
+    LOG_INF("RKNPU2: hybrid manifest path=%s profile=%s default_policy=%s rules=%zu strict=%d dump_plan=%d\n",
         hybrid_manifest_path.c_str(),
         hybrid_manifest_profile.c_str(),
         hybrid_manifest_default_policy.c_str(),
@@ -731,7 +732,7 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
             if (rk3588_config.hybrid_manifest_strict) {
                 throw std::runtime_error(error);
             }
-            LLAMA_LOG_WARN("RKNPU2: ignoring hybrid manifest '%s': %s\n",
+            LOG_WRN("RKNPU2: ignoring hybrid manifest '%s': %s\n",
                 rk3588_config.hybrid_manifest_path.c_str(), error.c_str());
         }
     }
