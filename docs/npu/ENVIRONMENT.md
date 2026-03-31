@@ -104,8 +104,9 @@ RKNPU_CTX_CACHE_SIZE=32 ./build/bin/llama-cli -m model.gguf --n-gpu-layers 99
 ```
 
 **Important:** `RKNN_SPLIT_FACTOR` and the cache limits address different problems.
-- `RKNN_SPLIT_FACTOR` reduces per-allocation size for routed tensors.
-- `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE` bound persistent cache growth across repeated or broader routed runs.
+- `RKNN_SPLIT_FACTOR` does not reduce the top-level routed tensor allocation because `ggml_backend_rknpu_buffer_type_get_alloc_size()` still sums the packed segments back into one tensor-sized allocation.
+- `RKNN_SPLIT_FACTOR` only reduces per-segment import and execution granularity once the backend is running.
+- `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE` are the knobs to use when you need to bound persistent RKNN state growth or reduce pressure from broader routed runs.
 
 HYBRID_PATTERN
 --------------

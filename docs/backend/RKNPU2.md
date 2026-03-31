@@ -98,6 +98,8 @@ For models that exceed IOVA memory, use split factor:
 RKNN_SPLIT_FACTOR=4 ./build/bin/llama-cli -m large-model.gguf --n-gpu-layers 99
 ```
 
+`RKNN_SPLIT_FACTOR` changes per-segment import and execution granularity, but it does not shrink the top-level routed tensor allocation because the packed segments still add up to the same tensor-sized buffer.
+
 If repeated or broader hybrid runs still consume too much persistent RKNN/IOMMU space, also bound the runtime caches:
 
 ```bash
@@ -169,7 +171,7 @@ Troubleshooting
 3. Lower `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE` when repeated routed runs are consuming persistent RKNN state
 4. Use quantization with smaller memory footprint
 
-`RKNN_SPLIT_FACTOR` reduces allocation granularity, while the two cache limits reduce long-lived RKNN state retained across repeated or broader routed workloads.
+`RKNN_SPLIT_FACTOR` only changes per-segment runtime granularity. Use `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE` when you need to bound persistent RKNN state or reduce pressure from broader routed workloads.
 
 ### Slow inference on NPU
 

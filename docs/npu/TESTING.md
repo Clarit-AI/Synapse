@@ -140,14 +140,16 @@ RKNN_SPLIT_FACTOR=4 ./build/bin/llama-cli -m huge-model.gguf --n-gpu-layers 99
 RKNPU_B_CACHE_SIZE=32 \
 RKNPU_CTX_CACHE_SIZE=32 \
 HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json \
-HYBRID_PROFILE=balanced \
+HYBRID_PROFILE=dense-balanced \
 HYBRID_STRICT=1 \
     ./build/bin/llama-cli -m model.gguf -p "Cache validation" --n-gpu-layers 99 -n 64
 ```
 
-Repeat the same command several times or run a small loop to confirm cache reuse stays bounded instead of growing without limit.
+Do not restart `llama-cli` between checks. Keep one backend process alive and drive repeated in-process inference against that same backend so the LRUs and backend/model lifetime are preserved.
 
-**Pass criteria:** no crash, no stale-handle symptoms, and logs continue to show successful RKNN init / matmul execution across repeated runs.
+Use a loop inside the running process or ping the same long-lived backend repeatedly, then confirm cache reuse stays bounded instead of growing without limit.
+
+**Pass criteria:** no crash, no stale-handle symptoms, and logs from the same long-lived backend continue to show successful RKNN init / matmul execution without unbounded cache growth.
 
 ---
 
@@ -185,7 +187,7 @@ HYBRID_PATTERN=FP16_STANDARD,INT8_STANDARD \
 
 ```bash
 HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json \
-HYBRID_PROFILE=balanced \
+HYBRID_PROFILE=dense-balanced \
 HYBRID_DUMP_PLAN=1 \
     ./build/bin/llama-cli -m model.gguf -p "Test" --n-gpu-layers 99
 ```
@@ -238,7 +240,9 @@ For broader hybrid coverage, repeat Test 12 with:
 - `HYBRID_STRICT=1`
 - conservative `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE`
 
-This is the preferred regression check for cache-growth fixes because it exercises many routed tensors without relying on a single one-off run.
+Do this against one long-lived backend process rather than by repeatedly restarting `llama-cli`, so the same backend/model lifetime and LRU state are preserved across requests.
+
+This is the preferred regression check for cache-growth fixes because it exercises many routed tensors in-process and makes stale-handle or unbounded-growth behavior visible.
 
 ---
 
