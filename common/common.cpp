@@ -500,11 +500,17 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_CACHE_TYPE_V",     params.cache_type_v);
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
+    get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
     get_env("LLAMA_ARG_HYBRID_MANIFEST",  params.hybrid_manifest);
     get_env("LLAMA_ARG_HYBRID_PROFILE",   params.hybrid_profile);
     get_env("LLAMA_ARG_HYBRID_DRY_RUN",   params.hybrid_dry_run);
     get_env("LLAMA_ARG_HYBRID_DUMP_PLAN", params.hybrid_dump_plan);
     get_env("LLAMA_ARG_HYBRID_STRICT",    params.hybrid_strict);
+    get_env("HYBRID_MANIFEST",            params.hybrid_manifest);
+    get_env("HYBRID_PROFILE",             params.hybrid_profile);
+    get_env("HYBRID_STRICT",              params.hybrid_strict);
+    get_env("HYBRID_DRY_RUN",             params.hybrid_dry_run);
+    get_env("HYBRID_DUMP_PLAN",           params.hybrid_dump_plan);
 
 }
 
@@ -619,6 +625,9 @@ void maybe_apply_hybrid_manifest(gpt_params & params) {
             throw std::runtime_error(format("failed to open hybrid dump plan output: %s", params.hybrid_dump_plan.c_str()));
         }
         out << plan_json.dump(2) << '\n';
+        if (!out) {
+            throw std::runtime_error(format("failed to write hybrid plan to '%s'", params.hybrid_dump_plan.c_str()));
+        }
     }
 
     if (params.hybrid_dry_run) {
@@ -1641,6 +1650,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.k_cache_hadamard = true;
         return true;
     }
+    if (arg == "-vhad" || arg == "--v-cache-hadamard") {
+        params.v_cache_hadamard = true;
+        return true;
+    }
     if (arg == "-smgs" || arg == "--split-mode-graph-scheduling") {
         params.split_mode_graph_scheduling = true;
         return true;
@@ -2432,6 +2445,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts,","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
+    options.push_back({ "*",         "-vhad,  --v-cache-hadamard,",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", true});
     options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", false});
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
@@ -2578,7 +2592,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "perplexity",  "       --hellaswag-tasks N",    "number of tasks to use when computing the HellaSwag score (default: %zu)", params.hellaswag_tasks });
     options.push_back({ "perplexity",  "       --winogrande",           "compute Winogrande score over random tasks from datafile supplied with -f" });
     options.push_back({ "perplexity",  "       --winogrande-tasks N",   "number of tasks to use when computing the Winogrande score (default: %zu)", params.winogrande_tasks });
-    options.push_back({ "perplexity",  "       --multiple-choice",      "compute multiple choice score over random tasks from datafile supplied with -f" });
+    options.push_back({ "*",           "       --hybrid-dump-plan FILE", "write the resolved hybrid plan JSON to FILE during pre-load processing" });
     options.push_back({ "perplexity",  "       --multiple-choice-tasks N",
                                                                         "number of tasks to use when computing the multiple choice score (default: %zu)", params.multiple_choice_tasks });
     options.push_back({ "perplexity",  "       --kl-divergence",        "computes KL-divergence to logits provided via --kl-divergence-base" });
@@ -3448,6 +3462,8 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
+
+    mparams.hybrid_dump_plan = params.hybrid_dump_plan.empty() ? nullptr : params.hybrid_dump_plan.c_str();
     mparams.mla             = params.mla_attn;
     mparams.dry_run         = params.dry_run;
     mparams.rpc_servers     = params.rpc_servers.c_str();
@@ -3552,6 +3568,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.rope_cache        = params.rope_cache;
     cparams.graph_reuse       = params.graph_reuse;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
+    cparams.v_cache_hadamard  = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
@@ -4434,7 +4451,6 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
 #else
     fprintf(stream, "debug: true\n");
 #endif // NDEBUG
-
     fprintf(stream, "model_desc: %s\n", model_desc);
     fprintf(stream, "n_vocab: %d  # output size of the final layer, 32001 for some models\n", llama_n_vocab(llama_get_model(lctx)));
 
@@ -4573,6 +4589,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "rope_cache: %s # default: false\n", params.rope_cache ? "true" : "false");
     fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
+    fprintf(stream, "v_cache_hadamard: %s # default: false\n", params.v_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_mode_graph_scheduling: %s # default: false\n", params.split_mode_graph_scheduling ? "true" : "false");
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
