@@ -226,7 +226,8 @@ namespace {
             return false;
         }
 
-        const std::string backend = to_upper(rule_json.value("backend", std::string("NPU")));
+        const std::string target = to_upper(rule_json.value("target", std::string()));
+        const std::string backend = to_upper(rule_json.value("backend", target.empty() ? std::string("NPU") : target));
         rule.force_cpu = backend == "CPU" || backend == "CPU_ONLY";
         rule.required = rule_json.value("required", false);
         rule.role = rule_json.value("role", std::string());
@@ -240,15 +241,37 @@ namespace {
             }
         }
 
-        if (rule_json.contains("source_quant_allow")) {
-            const auto & arr = rule_json["source_quant_allow"];
+        if (rule_json.contains("shape")) {
+            const auto & shape = rule_json["shape"];
+            if (!shape.is_object()) {
+                error = "shape must be an object";
+                return false;
+            }
+            if (shape.contains("k_divisible_by")) {
+                if (!shape["k_divisible_by"].is_number_integer()) {
+                    error = "shape.k_divisible_by must be an integer";
+                    return false;
+                }
+                rule.k_divisible_by = shape["k_divisible_by"].get<int>();
+            }
+            if (shape.contains("n_divisible_by")) {
+                if (!shape["n_divisible_by"].is_number_integer()) {
+                    error = "shape.n_divisible_by must be an integer";
+                    return false;
+                }
+                rule.n_divisible_by = shape["n_divisible_by"].get<int>();
+            }
+        }
+
+        if (rule_json.contains("source_quant_allow") || rule_json.contains("quant_allow")) {
+            const auto & arr = rule_json.contains("source_quant_allow") ? rule_json["source_quant_allow"] : rule_json["quant_allow"];
             if (!arr.is_array()) {
-                error = "source_quant_allow must be an array";
+                error = "source_quant_allow/quant_allow must be an array";
                 return false;
             }
             for (const auto & item : arr) {
                 if (!item.is_string()) {
-                    error = "source_quant_allow entries must be strings";
+                    error = "source_quant_allow/quant_allow entries must be strings";
                     return false;
                 }
                 rule.source_quant_allow.push_back(to_upper(item.get<std::string>()));
@@ -315,11 +338,15 @@ namespace {
         const json * rules_src = nullptr;
         if (profile_obj.contains("rules")) {
             rules_src = &profile_obj["rules"];
+        } else if (profile_obj.contains("routes")) {
+            rules_src = &profile_obj["routes"];
         } else if (manifest.contains("rules")) {
             rules_src = &manifest["rules"];
+        } else if (manifest.contains("routes")) {
+            rules_src = &manifest["routes"];
         }
         if (rules_src == nullptr || !rules_src->is_array()) {
-            error = "hybrid manifest does not contain a rules array";
+            error = "hybrid manifest does not contain a rules/routes array";
             return false;
         }
 
@@ -355,6 +382,13 @@ namespace {
 
         const std::string name = tensor->name != nullptr ? tensor->name : "";
         if (!std::regex_search(name, rule.match)) {
+            return false;
+        }
+
+        if (rule.k_divisible_by > 0 && tensor->ne[0] % rule.k_divisible_by != 0) {
+            return false;
+        }
+        if (rule.n_divisible_by > 0 && tensor->ne[1] % rule.n_divisible_by != 0) {
             return false;
         }
 
