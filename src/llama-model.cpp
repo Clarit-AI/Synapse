@@ -1869,6 +1869,9 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
                 best_match = entry.first;
             }
         }
+        if (tensor_name.find(base_name) == 0) {
+            return entry.first;
+        }
     }
     return best_match;
 }
