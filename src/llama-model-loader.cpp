@@ -289,9 +289,18 @@ static bool parse_rule(const json & value, hybrid_manifest_rule & rule, std::str
     try {
         rule.name = value.value("name", std::string());
         rule.match = value.value("match", std::string());
-        rule.backend = lower_copy(value.value("backend", std::string("cpu")));
-        rule.npu_pipeline = value.value("npu_pipeline", std::string());
-        rule.source_quant_allow = json_string_array(value.value("source_quant_allow", json::array()));
+        if (rule.match.empty()) {
+            rule.match = value.value("pattern", std::string());
+        }
+
+        const std::string target = lower_copy(value.value("target", std::string()));
+        rule.backend = lower_copy(value.value("backend", target.empty() ? std::string("npu") : target));
+        if (rule.backend == "default") {
+            rule.backend = "npu";
+        }
+
+        rule.npu_pipeline = value.value("npu_pipeline", value.value("pipeline", std::string()));
+        rule.source_quant_allow = json_string_array(value.contains("source_quant_allow") ? value["source_quant_allow"] : value.value("quant_allow", json::array()));
         rule.fallback = lower_copy(value.value("fallback", std::string("cpu")));
         rule.role = value.value("role", std::string());
         rule.required = value.value("required", false);
@@ -301,14 +310,14 @@ static bool parse_rule(const json & value, hybrid_manifest_rule & rule, std::str
                 return false;
             }
         }
-        if (value.contains("min_shape")) {
-            const json & shape = value["min_shape"];
+        if (value.contains("min_shape") || value.contains("shape")) {
+            const json & shape = value.contains("min_shape") ? value["min_shape"] : value["shape"];
             if (!shape.is_object()) {
-                err = "rule.min_shape must be an object";
+                err = "rule.min_shape/shape must be an object";
                 return false;
             }
-            rule.k_align = shape.value("k_align", 0);
-            rule.n_align = shape.value("n_align", 0);
+            rule.k_align = shape.value("k_align", shape.value("k_divisible_by", 0));
+            rule.n_align = shape.value("n_align", shape.value("n_divisible_by", 0));
             rule.min_m   = shape.value("min_m", 0);
             rule.min_n   = shape.value("min_n", 0);
         }
@@ -376,8 +385,9 @@ static bool parse_hybrid_manifest(const std::string & path, const std::string & 
             manifest.model_hint_n_layer = hint.value("n_layer", -1);
         }
 
-        if (doc.contains("rules")) {
-            if (!parse_rules_array(doc["rules"], manifest.rules, err, strict)) {
+        if (doc.contains("rules") || doc.contains("routes")) {
+            const json & rules = doc.contains("rules") ? doc["rules"] : doc["routes"];
+            if (!parse_rules_array(rules, manifest.rules, err, strict)) {
                 return false;
             }
         }
@@ -394,8 +404,9 @@ static bool parse_hybrid_manifest(const std::string & path, const std::string & 
                     err = format("profile '%s' must be an object", profile.name.c_str());
                     return false;
                 }
-                if (it.value().contains("rules")) {
-                    if (!parse_rules_array(it.value()["rules"], profile.rules, err, strict)) {
+                if (it.value().contains("rules") || it.value().contains("routes")) {
+                    const json & rules = it.value().contains("rules") ? it.value()["rules"] : it.value()["routes"];
+                    if (!parse_rules_array(rules, profile.rules, err, strict)) {
                         return false;
                     }
                 }
@@ -457,6 +468,16 @@ static std::string infer_npu_pipeline_for_type(ggml_type type) {
         case GGML_TYPE_Q4_0:  return "INT4_HADAMARD";
         default:              return std::string();
     }
+}
+
+static bool tensor_requires_cpu_visible_storage(const std::string & name) {
+    // ggml_fused_up_gate currently stays on the CPU, so its source weights must
+    // remain readable in logical ggml layout instead of packed RKNPU storage.
+    auto has_suffix = [&](const char * suffix) {
+        const size_t suffix_len = std::strlen(suffix);
+        return name.size() >= suffix_len && name.compare(name.size() - suffix_len, suffix_len, suffix) == 0;
+    };
+    return has_suffix(".ffn_up.weight") || has_suffix(".ffn_gate.weight");
 }
 
 static bool tensor_is_supported_npu_candidate(const ggml_tensor * tensor) {
@@ -1151,6 +1172,16 @@ void llama_model_loader::build_hybrid_plan() {
             }
 
             if (backend == "npu") {
+                if (tensor_requires_cpu_visible_storage(tensor_name)) {
+                    route.buft = ggml_backend_cpu_buffer_type();
+                    route.backend_name = "cpu";
+                    route.source = LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST;
+                    route.reason = format(
+                            "manifest rule '%s' requested NPU, but tensor must stay CPU-visible for ggml_fused_up_gate",
+                            rule.name.c_str());
+                    return true;
+                }
+
                 const std::string pipeline = !rule.npu_pipeline.empty() ? rule.npu_pipeline : infer_npu_pipeline_for_type(weight.tensor->type);
                 if (pipeline.empty()) {
                     if (hybrid_strict || rule.required) {
@@ -1215,7 +1246,11 @@ void llama_model_loader::build_hybrid_plan() {
         }
 
         if (default_policy_cpu_only(manifest.default_cpu_policy) || manifest.default_cpu_policy == "cpu_preferred") {
+            route.buft = ggml_backend_cpu_buffer_type();
+            route.backend_name = "cpu";
+            route.source = LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST;
             route.reason = "manifest default_cpu_policy kept tensor on CPU";
+            return true;
         }
         return false;
     };
