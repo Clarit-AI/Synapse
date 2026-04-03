@@ -449,6 +449,16 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_GEMMA4:
+                // Gemma4 uses SPM-style BPE: spaces are replaced with ▁ by the
+                // normalizer, then BPE merges run on the whole text without
+                // word-level pre-splitting. We only need to split on newlines
+                // since BPE merge lookup asserts no newlines in tokens.
+                regex_exprs = {
+                    "[^\\n]+|[\\n]+",
+                };
+                byte_encode = false; // uses raw UTF-8, not GPT-2 byte encoding
+                break;
             default:
                 // default regex for BPE tokenization pre-processing
                 regex_exprs = {
