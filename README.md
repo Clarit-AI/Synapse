@@ -1,6 +1,7 @@
 # Synapse: a llama.cpp fork with better CPU performance and Rockchip NPU Support.
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Clarit-AI/Synapse)
+
 
 ## 🧬 Project Origin & Architecture
 
