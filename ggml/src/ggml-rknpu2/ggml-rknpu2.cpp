@@ -703,6 +703,9 @@ static std::shared_ptr<rknn_tensor_mem> get_or_create_npu_buffer(
     return mem_shared;
 }
 
+// Forward declaration needed because graph_compute uses it before the definition below.
+static ggml_backend_buffer_type_t ggml_backend_rknpu_buffer_type(void);
+
 static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph) {
     auto* backend_ctx = (ggml_backend_rknpu_context*)backend->context;
     if (rknpu_trace_progress()) {
