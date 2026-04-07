@@ -309,10 +309,11 @@ struct ggml_backend_rknpu_buffer_context {
     // Per-tensor random sign vector for Hadamard Transform
     std::unordered_map<const struct ggml_tensor *, std::vector<float>> hadamard_s_vectors;
 
-    // Per-tensor original data backup: when set_tensor repacks weights to NPU format,
-    // we keep the original data here so that the CPU backend can still read the weights
-    // if the scheduler routes a MUL_MAT op to CPU (because dst is on a CPU buffer).
-    std::unordered_map<const struct ggml_tensor *, std::vector<uint8_t>> original_tensor_data;
+    // Per-tensor, per-segment cache of NPU-packed B-matrix data.
+    // Key: (tensor_data_ptr, segment_offset_n)
+    // When the DMA buffer stores original data, we pack on-the-fly on first NPU use
+    // and cache the result here. Subsequent uses read from cache, avoiding repacking.
+    std::unordered_map<std::tuple<const void*, int>, std::vector<uint8_t>, TupleHasher> packed_b_cpu_cache;
 
     std::mutex mutex;
 };
@@ -553,6 +554,48 @@ struct ggml_backend_rknpu_context {
         }
         return mem_shared;
     }
+
+    // Create B-mem handle from on-the-fly packed CPU data.
+    // This is used when the DMA buffer contains original (not packed) weight data.
+    // The packed data is provided directly, copied into RKNN memory, and synced to device.
+    std::shared_ptr<rknn_tensor_mem> get_b_mem_from_packed(
+        const std::shared_ptr<rknpu_matmul_context> & matmul_ctx,
+        const std::vector<uint8_t> & packed_data,
+        size_t segment_size_bytes,
+        const struct ggml_tensor * tensor = nullptr) {
+
+        // Use a synthetic key for the cache based on matmul context and tensor identity
+        // The tensor's data pointer uniquely identifies the tensor in the DMA buffer
+        auto key = std::make_tuple(matmul_ctx->ctx, (ggml_backend_buffer_t)nullptr, (size_t)(tensor ? tensor->data : nullptr), segment_size_bytes);
+
+        const bool disable_b_cache = rknpu_disable_b_cache();
+        if (!disable_b_cache) {
+            if (auto * cached = b_mem_handle_cache.find(key)) {
+                return *cached;
+            }
+        }
+
+        rknn_tensor_mem * mem = rknn_create_mem(matmul_ctx->ctx, segment_size_bytes);
+        if (!mem) {
+            return nullptr;
+        }
+
+        // Copy packed data into RKNN memory
+        memcpy(mem->virt_addr, packed_data.data(), std::min(packed_data.size(), segment_size_bytes));
+        RKNN_CHECK(rknn_mem_sync(matmul_ctx->ctx, mem, RKNN_MEMORY_SYNC_TO_DEVICE), "sync packed B TO_DEVICE");
+
+        auto deleter = [matmul_ctx](rknn_tensor_mem * m) {
+            if (m && matmul_ctx->ctx != 0) {
+                rknn_destroy_mem(matmul_ctx->ctx, m);
+            }
+        };
+
+        std::shared_ptr<rknn_tensor_mem> mem_shared(mem, deleter);
+        if (!disable_b_cache) {
+            b_mem_handle_cache.insert(key, mem_shared);
+        }
+        return mem_shared;
+    }
 };
 
 static std::mutex g_rknpu_backend_registry_mutex;
@@ -716,6 +759,149 @@ static std::shared_ptr<rknn_tensor_mem> get_or_create_npu_buffer(
 // Forward declaration needed because graph_compute uses it before the definition below.
 static ggml_backend_buffer_type_t ggml_backend_rknpu_buffer_type(void);
 
+// On-the-fly B-matrix packing: reads original data from DMA buffer, packs a single
+// segment into NPU-native layout. Returns packed data for the segment.
+// Uses pre-computed scales from quantized_tensor_scales and Hadamard vectors from
+// hadamard_s_vectors (both computed during set_tensor).
+static std::vector<uint8_t> pack_b_segment_from_original(
+    const struct ggml_tensor * src0,
+    ggml_backend_rknpu_buffer_context * buf_ctx,
+    int K, int N, int K_op,
+    int n_offset, int n_segment,
+    const rknpu2_configuration::Rknpu2HardwarePipeline * pipeline,
+    const rknpu2_configuration::Rknpu2DeviceConfig & config) {
+
+    // Step 1: Dequantize the segment's rows from original format to FP32
+    const int n_rows = n_segment;
+    std::vector<float> fp32_segment((size_t)n_rows * K_op);
+
+    const bool is_hadamard = pipeline->use_hadamard;
+    std::vector<float> s_vec;
+    if (is_hadamard) {
+        std::lock_guard<std::mutex> lock(buf_ctx->mutex);
+        auto it = buf_ctx->hadamard_s_vectors.find(src0);
+        if (it != buf_ctx->hadamard_s_vectors.end()) {
+            s_vec = it->second;
+        }
+    }
+
+    // Dequantize each row of the segment from the original tensor data
+    // src0->data points into the DMA buffer where original Q8_0 (or other) data is stored
+    const uint8_t * raw_data = (const uint8_t *)src0->data;
+
+    #pragma omp parallel for
+    for (int i = 0; i < n_rows; ++i) {
+        const int n_global = n_offset + i;
+        float * dst_row = fp32_segment.data() + (size_t)i * K_op;
+
+        // Dequantize one row from original format to FP32
+        std::vector<float> raw_row(K);
+        if (src0->type == GGML_TYPE_Q8_0) {
+            const block_q8_0 * src = (const block_q8_0 *)raw_data;
+            dequantize_row_q8_0(src + (size_t)n_global * (K / QK8_0), raw_row.data(), K);
+        } else if (src0->type == GGML_TYPE_F16) {
+            const ggml_fp16_t * src = (const ggml_fp16_t *)raw_data;
+            const ggml_fp16_t * src_row = src + (size_t)n_global * K;
+            for (int k = 0; k < K; ++k) dst_row[k] = ggml_fp16_to_fp32(src_row[k]);
+            // Skip to Hadamard/quantize if F16 (already FP32)
+            if (is_hadamard) {
+                std::vector<float> signed_row(K);
+                for (int k = 0; k < K; ++k) signed_row[k] = raw_row[k] * s_vec[k];
+                rknpu2_calibration::hadamard_transform(dst_row, signed_row.data(), K, K_op);
+            }
+            continue;
+        } else if (src0->type == GGML_TYPE_F32) {
+            const float * src = (const float *)raw_data;
+            memcpy(raw_row.data(), src + (size_t)n_global * K, K * sizeof(float));
+        } else {
+            GGML_ASSERT(false && "Unsupported weight type for on-the-fly NPU packing");
+        }
+
+        // Apply Hadamard if needed
+        if (is_hadamard) {
+            std::vector<float> signed_row(K);
+            for (int k = 0; k < K; ++k) signed_row[k] = raw_row[k] * s_vec[k];
+            rknpu2_calibration::hadamard_transform(dst_row, signed_row.data(), K, K_op);
+        } else {
+            memcpy(dst_row, raw_row.data(), K * sizeof(float));
+        }
+    }
+
+    // Step 2: Quantize the FP32 segment to NPU format (INT8 or FP16)
+    size_t packed_element_size = (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) ? 2 : 1;
+    std::vector<uint8_t> npu_segment((size_t)n_segment * K_op * packed_element_size);
+
+    // Get pre-computed B scales
+    std::vector<float> scales_B;
+    {
+        std::lock_guard<std::mutex> lock(buf_ctx->mutex);
+        auto it = buf_ctx->quantized_tensor_scales.find(src0);
+        // Scales should always exist since set_tensor pre-computes them
+        GGML_ASSERT(it != buf_ctx->quantized_tensor_scales.end() && "Quantized scale not found for OTF packing");
+        scales_B = it->second;
+    }
+
+    if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
+        uint16_t * fp16_ptr = (uint16_t *)npu_segment.data();
+        #pragma omp parallel for
+        for (int i = 0; i < n_rows; ++i) {
+            const float * src_row = fp32_segment.data() + (size_t)i * K_op;
+            uint16_t * dst_row = fp16_ptr + (size_t)i * K_op;
+            rknpu2_quantization::convert_fp32_to_fp16(src_row, dst_row, K_op);
+        }
+    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
+        int8_t * int8_ptr = (int8_t *)npu_segment.data();
+        #pragma omp parallel for
+        for (int i = 0; i < n_rows; ++i) {
+            const float * src_row = fp32_segment.data() + (size_t)i * K_op;
+            int n_global = n_offset + i;
+            float scale_b = (n_global < (int)scales_B.size()) ? scales_B[n_global] : scales_B[0];
+            int8_t * dst_row = int8_ptr + (size_t)i * K_op;
+            rknpu2_quantization::quantize_fp32_to_int8(src_row, dst_row, K_op, scale_b);
+        }
+    }
+
+    // Step 3: Pack to RKNN native layout for this segment
+    int split_factor = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_split_factor();
+    auto segments = compute_matrix_segments(N, config.core_count, pipeline->n_align, split_factor);
+
+    // Find the segment size in the RKNN native layout
+    size_t packed_segment_size = (size_t)n_segment * K_op * packed_element_size;
+    std::vector<uint8_t> rknn_packed(packed_segment_size);
+
+    // Use the pipeline's pack_func to pack this segment
+    // The pack_func expects the full NPU matrix as src, extracts rows [n_offset, n_offset+n_segment]
+    // So we need a temporary full-width matrix to pass to pack_func
+    // Actually, pack_func takes N_total and n_offset/n_segment to know which rows to pack.
+    // But our npu_segment only has n_segment rows, not the full N rows.
+    // We need to create a view that looks like the full matrix but only has our segment's data.
+
+    // The pack_func signature: pack_func(dst, src, K, N_total, n_offset, n_segment)
+    // src is expected to be in row-major format with N_total rows of K_op elements each.
+    // We only have n_segment rows starting at n_offset. The pack_func reads from
+    // src + n_global * K + k_base + j * 32 for each global row.
+    // So we need src to have the full N rows. But we only quantized n_segment rows.
+
+    // Solution: create a full-size NPU matrix with zeros, fill in our segment rows.
+    // This is wasteful but correct. For optimization, we could modify pack_func
+    // to accept a segment-only matrix.
+    size_t full_npu_size = (size_t)N * K_op * packed_element_size;
+    std::vector<uint8_t> full_npu_matrix(full_npu_size, 0);
+
+    // Copy our segment's quantized rows into the full matrix at the correct positions
+    size_t row_bytes = (size_t)K_op * packed_element_size;
+    for (int i = 0; i < n_rows; ++i) {
+        size_t dst_offset = (size_t)(n_offset + i) * row_bytes;
+        size_t src_offset = (size_t)i * row_bytes;
+        memcpy(full_npu_matrix.data() + dst_offset, npu_segment.data() + src_offset, row_bytes);
+    }
+
+    // Now pack this segment using the pipeline's pack function
+    pipeline->pack_func(rknn_packed.data(), full_npu_matrix.data(), K_op, N, n_offset, n_segment);
+
+    return rknn_packed;
+}
+
 static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph) {
     auto* backend_ctx = (ggml_backend_rknpu_context*)backend->context;
     if (rknpu_trace_progress()) {
@@ -834,9 +1020,10 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
         // ===========================================
         // ========== 2. Preparing B-matrix ==========
         // ===========================================
+        // DMA buffer contains original (not packed) weight data.
+        // We pack B-matrix segments on-the-fly and cache the packed data.
         ggml_backend_buffer_t src0_buffer = src0->buffer;
         auto* src0_buf_ctx = (ggml_backend_rknpu_buffer_context*)src0_buffer->context;
-        size_t src0_base_offset_in_dma = (uintptr_t)src0->data - (uintptr_t)ggml_backend_buffer_get_base(src0_buffer);
 
         size_t type_size_packed;
         if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) type_size_packed = 2;
@@ -844,71 +1031,66 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
         else type_size_packed = 0;
 
         {
-            size_t current_offset_in_tensor = 0;
-            for (const auto& seg : all_segments) {
-                for (size_t idx = 0; idx < num_active_segments; ++idx) {
-                    if (active_segments[idx].offset_n == seg.offset_n) {
-                        auto& matmul_ctx = matmul_ctxs[idx];
-                        size_t segment_size_bytes = matmul_ctx->io_attr.B.size;
-                        size_t total_offset = src0_base_offset_in_dma + current_offset_in_tensor;
-                        const size_t expected_packed_segment_bytes =
-                            type_size_packed > 0 ? (size_t) seg.size_n * K_op * type_size_packed : (size_t) seg.size_n * K_op / 2;
-                        if (debug_tensor) {
-                            fprintf(stderr,
-                                    "RKNPU_DEBUG b_segment tensor=%s offset_n=%d size_n=%d io_attr_B_size=%zu expected_packed_segment_bytes=%zu total_offset=%zu\n",
-                                    src0->name,
-                                    seg.offset_n,
-                                    seg.size_n,
-                                    segment_size_bytes,
-                                    expected_packed_segment_bytes,
-                                    total_offset);
-                        }
-                        active_segment_total_offsets[idx] = total_offset;
-                        active_segment_expected_bytes[idx] = expected_packed_segment_bytes;
-                        
-                        if (!serial_b_segments) {
-                            mem_B_segments[idx] = backend_ctx->get_b_mem_handle(
-                                src0_buffer,
-                                src0_buf_ctx,
-                                total_offset,
-                                segment_size_bytes,
-                                matmul_ctx,
-                                src0);
-                            if (!mem_B_segments[idx]) return GGML_STATUS_FAILED;
-                            if (debug_tensor) {
-                                fprintf(stderr,
-                                        "RKNPU_DEBUG b_set_io_begin tensor=%s mem=%p ctx=%p io_attr_B_size=%u\n",
-                                        src0->name,
-                                        (void *) mem_B_segments[idx].get(),
-                                        (void *) matmul_ctx->ctx,
-                                        matmul_ctx->io_attr.B.size);
-                            }
-                            int ret_set_b = rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_B_segments[idx].get(), &matmul_ctx->io_attr.B);
-                            if (discrim_trace) {
-                                fprintf(stderr,
-                                        "RKNPU_DISCRIM set_b tensor=%s idx=%zu ret=%d ctx=%p mem=%p B_size=%u expected_bytes=%zu total_offset=%zu\n",
-                                        src0->name,
-                                        idx,
-                                        ret_set_b,
-                                        (void *) matmul_ctx->ctx,
-                                        (void *) mem_B_segments[idx].get(),
-                                        matmul_ctx->io_attr.B.size,
-                                        expected_packed_segment_bytes,
-                                        total_offset);
-                            }
-                            RKNN_CHECK(ret_set_b, "set_io_mem B segment");
-                            if (debug_tensor) {
-                                fprintf(stderr,
-                                        "RKNPU_DEBUG b_set_io_end tensor=%s mem=%p ctx=%p\n",
-                                        src0->name,
-                                        (void *) mem_B_segments[idx].get(),
-                                        (void *) matmul_ctx->ctx);
-                            }
-                        }
-                        break;
+            for (size_t idx = 0; idx < num_active_segments; ++idx) {
+                auto& matmul_ctx = matmul_ctxs[idx];
+                size_t segment_size_bytes = matmul_ctx->io_attr.B.size;
+                const int n_offset = active_segments[idx].offset_n;
+                const int n_segment = active_segments[idx].size_n;
+
+                // Look up or create packed B data for this segment
+                auto packed_key = std::make_tuple((const void *)src0->data, n_offset);
+                std::vector<uint8_t> * packed_data = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
+                    auto it = src0_buf_ctx->packed_b_cpu_cache.find(packed_key);
+                    if (it != src0_buf_ctx->packed_b_cpu_cache.end()) {
+                        packed_data = &it->second;
                     }
                 }
-                current_offset_in_tensor += type_size_packed > 0 ? (size_t)seg.size_n * K_op * type_size_packed : (size_t)seg.size_n * K_op / 2;
+
+                if (!packed_data) {
+                    // Pack on-the-fly from original data in DMA buffer
+                    auto packed = pack_b_segment_from_original(
+                        src0, src0_buf_ctx,
+                        K, N, K_op,
+                        n_offset, n_segment,
+                        pipeline, config);
+                    {
+                        std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
+                        auto & entry = src0_buf_ctx->packed_b_cpu_cache[packed_key];
+                        entry = std::move(packed);
+                        packed_data = &entry;
+                    }
+                    if (rknpu_trace_dma_usage()) {
+                        fprintf(stderr, "RKNPU_DMA otf_pack tensor=%s seg=%d offset_n=%d size_n=%d packed_bytes=%zu\n",
+                                src0->name, (int)idx, n_offset, n_segment, packed_data->size());
+                    }
+                }
+
+                // Create RKNN memory handle from packed data
+                mem_B_segments[idx] = backend_ctx->get_b_mem_from_packed(
+                    matmul_ctx,
+                    *packed_data,
+                    segment_size_bytes,
+                    src0);
+                if (!mem_B_segments[idx]) return GGML_STATUS_FAILED;
+
+                if (!serial_b_segments) {
+                    int ret_set_b = rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_B_segments[idx].get(), &matmul_ctx->io_attr.B);
+                    if (discrim_trace) {
+                        fprintf(stderr,
+                                "RKNPU_DISCRIM set_b tensor=%s idx=%zu ret=%d ctx=%p mem=%p B_size=%u otf=1\n",
+                                src0->name, idx, ret_set_b,
+                                (void *) matmul_ctx->ctx,
+                                (void *) mem_B_segments[idx].get(),
+                                matmul_ctx->io_attr.B.size);
+                    }
+                    RKNN_CHECK(ret_set_b, "set_io_mem B segment");
+                }
+
+                // Store offsets for serial path (used for B-mem cache key only)
+                active_segment_total_offsets[idx] = 0; // not used for DMA offset anymore
+                active_segment_expected_bytes[idx] = packed_data->size();
             }
         }
 
@@ -1199,13 +1381,8 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             for (size_t idx = 0; idx < num_active_segments; ++idx) {
                 auto & matmul_ctx = matmul_ctxs[idx];
 
-                mem_B_segments[idx] = backend_ctx->get_b_mem_handle(
-                    src0_buffer,
-                    src0_buf_ctx,
-                    active_segment_total_offsets[idx],
-                    matmul_ctx->io_attr.B.size,
-                    matmul_ctx,
-                    src0);
+                // B-mem handle was already created in step 2 (OTF packing) for serial mode too
+                // mem_B_segments[idx] was set in the B-matrix preparation section above
                 if (!mem_B_segments[idx]) return GGML_STATUS_FAILED;
 
                 int ret_set_b = rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_B_segments[idx].get(), &matmul_ctx->io_attr.B);
@@ -1660,23 +1837,22 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
             return;
         }
 
-        // Backup original data before repacking. When the ggml scheduler routes a
-        // MUL_MAT op to the CPU backend (because dst is on a CPU buffer), the CPU
-        // needs to read the original weight data, not the NPU-packed version.
-        // Without this backup, the CPU would read garbage INT8-packed data and crash.
-        {
-            std::lock_guard<std::mutex> lock(ctx->mutex);
-            auto & backup = ctx->original_tensor_data[tensor];
-            backup.resize(size);
-            memcpy(backup.data(), (const uint8_t *)data + offset, size);
-        }
-
         const int K_op = pipeline->use_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
 
-        std::vector<float> fp32_matrix = dequantize_tensor(tensor, ctx, data, K, N, K_op, pipeline->use_hadamard);
-        std::vector<uint8_t> npu_matrix = quantize_tensor(tensor, ctx, fp32_matrix, K_op, N, pipeline->npu_type_a);
-        int split_factor = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_split_factor();
-        pack_tensor(npu_matrix.data(), tensor_dma_ptr, K_op, N, config.core_count, pipeline, split_factor);
+        // Pre-compute quantization scales and Hadamard vectors from the original data.
+        // The actual NPU packing happens on-the-fly in graph_compute, but the scales
+        // must match the data that will be packed later.
+        {
+            std::vector<float> fp32_matrix = dequantize_tensor(tensor, ctx, data, K, N, K_op, pipeline->use_hadamard);
+            // Compute and store scales (quantize_tensor stores them in quantized_tensor_scales)
+            std::vector<uint8_t> npu_matrix = quantize_tensor(tensor, ctx, fp32_matrix, K_op, N, pipeline->npu_type_a);
+            // Discard the packed data — we only needed the scale computation
+            (void)npu_matrix;
+        }
+
+        // Store original data in DMA buffer (not packed). The CPU backend reads
+        // original data directly. NPU packing happens on-the-fly in graph_compute.
+        memcpy(tensor_dma_ptr + offset, data, size);
     } else {
         memcpy(tensor_dma_ptr + offset, data, size);
     }
@@ -1684,19 +1860,7 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
 
 static void ggml_backend_rknpu_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-
-    // If we have a backup of the original (pre-packed) data, return that instead
-    // of the NPU-packed DMA contents. This allows the CPU backend to correctly
-    // read weight tensors that were repacked for NPU execution.
-    {
-        std::lock_guard<std::mutex> lock(ctx->mutex);
-        auto it = ctx->original_tensor_data.find(tensor);
-        if (it != ctx->original_tensor_data.end() && offset + size <= it->second.size()) {
-            memcpy(data, it->second.data() + offset, size);
-            return;
-        }
-    }
-
+    // DMA buffer contains original data (not NPU-packed), return directly
     uint8_t* dma_base = (uint8_t*)ctx->dma_buf.virt_addr;
     uint8_t* tensor_dma_ptr = dma_base + ((uintptr_t)tensor->data - (uintptr_t)ggml_backend_buffer_get_base(buffer));
     memcpy(data, tensor_dma_ptr + offset, size);
@@ -1790,7 +1954,12 @@ static size_t ggml_backend_rknpu_buffer_type_get_alloc_size(ggml_backend_buffer_
                 }
             }
         }
-        return total_size;
+        // Return the larger of packed NPU size or original tensor size.
+        // We store original data in the DMA buffer and pack on-the-fly for NPU,
+        // so the buffer must accommodate the (larger) original format.
+        // For INT8 pipelines, original Q8_0 is ~6% larger than packed INT8.
+        // For Hadamard pipelines, K_op >= K so packed size may already be larger.
+        return std::max(total_size, ggml_nbytes(tensor));
     }
 
     // Fallback to default size calculation for other types.
