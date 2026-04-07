@@ -242,8 +242,8 @@ Action needed: `cmake --build build -j4 --target llama-server` on-device.
 
 1. ~~Build `llama-server` on-device~~ DONE
 2. ~~Run the multi-turn test matrix with `RKNPU_SERIAL_B_SEGMENTS=1`~~ DONE (10/10 PASS)
-3. Fix the scale bookkeeping bug that blocks `dense-q8-late-ffn` and broader manifests
-4. Validate that request-2 completion is reliable across all manifest sizes
+3. ~~Fix the scale bookkeeping bug that blocks `dense-q8-late-ffn` and broader manifests~~ DONE (`104a03f0`, buffer-type guard)
+4. ~~Validate that request-2 completion is reliable across all manifest sizes~~ DONE (8/12/16/32-tensor manifests all pass)
 5. ~~Remove or gate the instrumentation behind a cmake flag before merge to main~~ DONE (all RKNPU trace removed from server-context.cpp)
 
 ---
@@ -412,7 +412,7 @@ The crash occurs during the **first inference request** (M=4+), processing `blk.
 ## Session 5: Original Data Backup Fix — Broader Manifest Validation
 
 **Date**: 2026-04-07
-**Commits**: pending
+**Commits**: `3b4858b9` (original data backup fix + DMA tracing + 4 new manifests)
 
 ### DMA Exhaustion Hypothesis — Disproved
 
@@ -486,4 +486,4 @@ All manifests pass with HTTP 200 on both request 1 and request 2.
 1. Investigate why the RKNPU compute buffer is only 23 MiB — can it be increased?
 2. Explore on-the-fly B-matrix packing in `graph_compute` instead of pre-packing in `set_tensor` (would eliminate the backup memory cost)
 3. Run 10-request validation on all fixed manifests
-4. Commit and prepare PR
+4. ~~Commit and prepare PR~~ — DONE (`3b4858b9`)
