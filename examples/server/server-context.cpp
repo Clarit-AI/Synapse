@@ -2819,7 +2819,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
                     // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
-                    return cur.pos_min < pos_min_thold;
+                    return cur.pos_min < pos_min_thold || cur.pos_min == 0;
                 }
             );
 
