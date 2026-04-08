@@ -174,7 +174,9 @@ RKNPU_SERIAL_B_SEGMENTS=1
 
 # Full per-op clear enabled in ggml-rknpu2.cpp
 # Individual caches otherwise enabled
+```
 
+```bash
 # llama-server flags
 --cache-ram 0
 ```
@@ -305,7 +307,7 @@ Build verified: clean compile after removal.
 
 **The "request 2 hangs" bug is closed.** The root cause was an observation timeout, not a server-side hang. The full server-side path works correctly:
 
-```
+```text
 RKNPU serialized B -> routed compute -> process_token -> budget check -> stopped_limit -> send_token_results limit-release -> send_final_response -> release_slot
 ```
 
@@ -321,7 +323,7 @@ RKNPU serialized B -> routed compute -> process_token -> budget check -> stopped
 ### Problem
 
 `dense-q8-late-ffn` (24 tensors to NPU, blocks 20-27 ffn_up/down/gate) crashes with:
-```
+```text
 GGML_ASSERT(quantized_scale not found)
 ```
 
@@ -372,7 +374,7 @@ if (!src0->buffer || src0->buffer->buft != ggml_backend_rknpu_buffer_type()) {
 
 The buffer-type guard introduced in Session 3 references `ggml_backend_rknpu_buffer_type()` at line 742, but that function is defined as `static` at line 1686 — 944 lines *after* the call site. The non-RKNPU build (`build/`) didn't compile `ggml-rknpu2.cpp`, so the issue was invisible. The RKNPU build (`build-rknpu/`) failed with:
 
-```
+```text
 error: 'ggml_backend_rknpu_buffer_type' was not declared in this scope
 ```
 

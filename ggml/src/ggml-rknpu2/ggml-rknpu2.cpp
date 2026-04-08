@@ -348,7 +348,7 @@ struct rknpu_matmul_context {
 // Backend main context
 struct ggml_backend_rknpu_context {
     using matmul_cache_key = std::tuple<int, int, int, int, int>;
-    using b_mem_cache_key = std::tuple<rknn_matmul_ctx, ggml_backend_buffer_t, size_t, size_t>;
+    using b_mem_cache_key = std::tuple<rknn_matmul_ctx, ggml_backend_buffer_t, size_t, size_t, int>;
 
     std::string name;
     std::mutex mutex;
@@ -483,7 +483,7 @@ struct ggml_backend_rknpu_context {
         const std::shared_ptr<rknpu_matmul_context> & matmul_ctx,
         const struct ggml_tensor * tensor = nullptr) {
         std::lock_guard<std::mutex> lock(mutex);
-        const auto key = std::make_tuple(matmul_ctx->ctx, src0_buffer, total_offset, segment_size_bytes);
+        const auto key = std::make_tuple(matmul_ctx->ctx, src0_buffer, total_offset, segment_size_bytes, 0);
         const bool disable_b_cache = rknpu_disable_b_cache();
         if (!disable_b_cache) {
             if (auto * cached = b_mem_handle_cache.find(key)) {
@@ -562,11 +562,12 @@ struct ggml_backend_rknpu_context {
         const std::shared_ptr<rknpu_matmul_context> & matmul_ctx,
         const std::vector<uint8_t> & packed_data,
         size_t segment_size_bytes,
-        const struct ggml_tensor * tensor = nullptr) {
+        const struct ggml_tensor * tensor = nullptr,
+        int n_offset = 0) {
 
-        // Use a synthetic key for the cache based on matmul context and tensor identity
-        // The tensor's data pointer uniquely identifies the tensor in the DMA buffer
-        auto key = std::make_tuple(matmul_ctx->ctx, (ggml_backend_buffer_t)nullptr, (size_t)(tensor ? tensor->data : nullptr), segment_size_bytes);
+        // Use a synthetic key for the cache based on matmul context, tensor identity, and segment offset.
+        // Including n_offset disambiguates segments of the same tensor that happen to have the same size.
+        auto key = std::make_tuple(matmul_ctx->ctx, (ggml_backend_buffer_t)nullptr, (size_t)(tensor ? tensor->data : nullptr), segment_size_bytes, n_offset);
 
         const bool disable_b_cache = rknpu_disable_b_cache();
         if (!disable_b_cache) {
@@ -801,15 +802,8 @@ static std::vector<uint8_t> pack_b_segment_from_original(
             dequantize_row_q8_0(src + (size_t)n_global * (K / QK8_0), raw_row.data(), K);
         } else if (src0->type == GGML_TYPE_F16) {
             const ggml_fp16_t * src = (const ggml_fp16_t *)raw_data;
-            const ggml_fp16_t * src_row = src + (size_t)n_global * K;
-            for (int k = 0; k < K; ++k) dst_row[k] = ggml_fp16_to_fp32(src_row[k]);
-            // Skip to Hadamard/quantize if F16 (already FP32)
-            if (is_hadamard) {
-                std::vector<float> signed_row(K);
-                for (int k = 0; k < K; ++k) signed_row[k] = raw_row[k] * s_vec[k];
-                rknpu2_calibration::hadamard_transform(dst_row, signed_row.data(), K, K_op);
-            }
-            continue;
+            const ggml_fp16_t * src_row_f16 = src + (size_t)n_global * K;
+            for (int k = 0; k < K; ++k) raw_row[k] = ggml_fp16_to_fp32(src_row_f16[k]);
         } else if (src0->type == GGML_TYPE_F32) {
             const float * src = (const float *)raw_data;
             memcpy(raw_row.data(), src + (size_t)n_global * K, K * sizeof(float));
@@ -831,12 +825,11 @@ static std::vector<uint8_t> pack_b_segment_from_original(
     size_t packed_element_size = (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) ? 2 : 1;
     std::vector<uint8_t> npu_segment((size_t)n_segment * K_op * packed_element_size);
 
-    // Get pre-computed B scales
+    // Get pre-computed B scales (FP16 pipeline doesn't use per-tensor scales)
     std::vector<float> scales_B;
-    {
+    if (pipeline->npu_type_a != rknpu2_configuration::NPU_TYPE_FP16) {
         std::lock_guard<std::mutex> lock(buf_ctx->mutex);
         auto it = buf_ctx->quantized_tensor_scales.find(src0);
-        // Scales should always exist since set_tensor pre-computes them
         GGML_ASSERT(it != buf_ctx->quantized_tensor_scales.end() && "Quantized scale not found for OTF packing");
         scales_B = it->second;
     }
@@ -1072,7 +1065,8 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                     matmul_ctx,
                     *packed_data,
                     segment_size_bytes,
-                    src0);
+                    src0,
+                    n_offset);
                 if (!mem_B_segments[idx]) return GGML_STATUS_FAILED;
 
                 if (!serial_b_segments) {
@@ -1597,6 +1591,13 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                 backend_ctx->clear_runtime_caches();
             } else {
                 backend_ctx->clear_runtime_caches_selective(clear_matmul, clear_b, clear_a, clear_c);
+            }
+
+            // Also evict per-buffer packed B caches when B handles are cleared,
+            // so stale packed data doesn't outlive its RKNN memory handles.
+            if (clear_b) {
+                std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
+                src0_buf_ctx->packed_b_cpu_cache.clear();
             }
         }
     }
