@@ -900,7 +900,7 @@ static bool llama_kv_cache_init(
         const bool qnext_recurrent = llama_is_recurrent_layer(hparams, i);
         const uint32_t n_embd_v_row = llama_kv_v_row_embd(model, hparams, i);
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
-        const uint32_t n_embd_head_k= hparams.n_embd_head_k;
+        const uint32_t n_embd_head_k= hparams.n_embd_head_k(i);
 
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
@@ -930,6 +930,11 @@ static bool llama_kv_cache_init(
             n_mla++;
         }
         else {
+            if (!hparams.has_kv(i)) {
+                cache.k_l.push_back(nullptr);
+                cache.v_l.push_back(nullptr);
+                continue;
+            }
             if (qnext_recurrent) {
                 s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
                 auto s_name = std::string{"cache_s_l"} + std::to_string(i);
@@ -971,7 +976,7 @@ static bool llama_kv_cache_init(
                 ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
                 split_cache_i = false;
             }
-            int n_embd_head_v = hparams.n_embd_head_v;
+            int n_embd_head_v = hparams.n_embd_head_v(i);
             k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
 
             int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
@@ -1591,8 +1596,8 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: n_rot            = %u\n",     __func__, hparams.n_rot);
         LLAMA_LOG_INFO("%s: n_swa            = %u\n",     __func__, hparams.n_swa);
         LLAMA_LOG_INFO("%s: n_swa_pattern    = %u\n",     __func__, hparams.n_swa_pattern);
-        LLAMA_LOG_INFO("%s: n_embd_head_k    = %u\n",     __func__, hparams.n_embd_head_k);
-        LLAMA_LOG_INFO("%s: n_embd_head_v    = %u\n",     __func__, hparams.n_embd_head_v);
+        LLAMA_LOG_INFO("%s: n_embd_head_k    = %u\n",     __func__, hparams.n_embd_head_k(0));
+        LLAMA_LOG_INFO("%s: n_embd_head_v    = %u\n",     __func__, hparams.n_embd_head_v(0));
         LLAMA_LOG_INFO("%s: n_gqa            = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_gqa(il);        }, hparams.n_layer).c_str());
         LLAMA_LOG_INFO("%s: n_embd_k_gqa     = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_embd_k_gqa(il); }, hparams.n_layer).c_str());
         LLAMA_LOG_INFO("%s: n_embd_v_gqa     = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_embd_v_gqa(il); }, hparams.n_layer).c_str());
@@ -1730,9 +1735,9 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         // is no MLA + FA for prompt processing, and MLA + FA for token generation, it would be useful
         // to change the MLA setting on the fly, depending on context. In that case, having prepared
         // the MLA tensors here is the right ting to do^TM.
-        const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
+        const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k(0) - hparams.n_rot;
         const uint32_t kv_lora_rank = hparams.n_lora_kv;
-        const int32_t n_embd_head_v = hparams.n_embd_head_v;
+        const int32_t n_embd_head_v = hparams.n_embd_head_v(0);
         const int32_t n_head        = hparams.n_head(0);
         std::vector<uint8_t> work_data;
         LLAMA_LOG_INFO("============ %s: need to compute %d wk_b/wv_b tensors\n", __func__, n_to_compute);
@@ -2061,7 +2066,8 @@ struct expert_tensors {
 };
 
 static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_loader & ml, const llama_model & model,
-        ggml_type cache_type_k, ggml_type cache_type_v, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch, int amb, bool flash_attn,
+        ggml_type cache_type_k, ggml_type cache_type_v, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch,
+        int amb, int worst_case_tokens, bool flash_attn,
         std::vector<expert_tensors> & experts) {
     int n_layer = model.hparams.n_layer;
     std::vector<double> result(n_layer+1, 0);
@@ -2235,7 +2241,8 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         tot_cache += kv_size;
         result[il] += kv_size;
     }
-    size_t output_size = model.hparams.n_vocab * n_ubatch * sizeof(float);
+    int n_output = worst_case_tokens > 0 ? worst_case_tokens : n_ubatch;
+    size_t output_size = model.hparams.n_vocab * n_output * sizeof(float);
     if (output_size < max_compute) output_size = max_compute;
     output_size -= max_compute;
     LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f MiB (output layer)\n", n_layer, result[n_layer]/1024./1024., output_size/1024./1024., (result[n_layer] + output_size)/1024./1024.);
@@ -2263,6 +2270,7 @@ static bool llm_load_tensors(
         int n_ubatch,
         int amb,
         int fit_margin,
+        int worst_case_tokens,
         bool flash_attn,
         bool use_mlock,
         bool validate_quants,
@@ -2396,7 +2404,8 @@ static bool llm_load_tensors(
     std::vector<llama_model_tensor_buft_override> overrides;
     if (device_count > 0) {
         std::vector<expert_tensors> experts;
-        auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, max_ctx_size, mla_attn, n_seq_max, n_ubatch, amb, flash_attn, experts);
+        auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, max_ctx_size, mla_attn, n_seq_max, n_ubatch,
+                amb, worst_case_tokens, flash_attn, experts);
         size_t required_mem = 0;
         for (int i = 0; i <= n_layer; ++i) {
             required_mem += layer_sizes[i];
@@ -3022,7 +3031,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
-            params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.flash_attn,
+            params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin,
+            params.worst_graph_tokens, params.flash_attn,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
         )) {
@@ -4779,7 +4789,7 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
         int n_tokens = (int)std::min(lctx.cparams.n_ctx, lctx.cparams.n_ubatch);
         int n_past = lctx.cparams.n_ctx - n_tokens;
         llama_token token = llama_token_bos(&lctx.model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-        ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true);
+        ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, lctx.cparams.worst_graph_tokens);
 
         // initialize scheduler with the worst-case graph
         lctx.reset_scheduler();
@@ -5020,6 +5030,7 @@ struct llama_model_params llama_model_default_params() {
         /*.amb                         =*/ 0,
         /*.fit_margin                  =*/ 0,
         /*.fit                         =*/ false,
+        /*.worst_graph_tokens          =*/ 0,
         /*.tensor_split                =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
@@ -5063,6 +5074,7 @@ struct llama_context_params llama_context_default_params() {
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
         /*.max_extra_alloc             =*/ 256,
+        /*.worst_case_tokens           =*/ 0,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
@@ -5484,6 +5496,7 @@ struct llama_context * llama_init_from_model(
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
     cparams.mtp              = params.mtp;
+    cparams.worst_graph_tokens = params.worst_case_tokens;
 
     cparams.reduce_type      = params.type_reduce;
     cparams.pooling_type     = params.pooling_type;
@@ -5615,8 +5628,8 @@ struct llama_context * llama_init_from_model(
         type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
     }
 
-    GGML_ASSERT(hparams.n_embd_head_k % ggml_blck_size(type_k) == 0);
-    GGML_ASSERT(hparams.n_embd_head_v % ggml_blck_size(type_v) == 0);
+    GGML_ASSERT(hparams.n_embd_head_k(0) % ggml_blck_size(type_k) == 0);
+    GGML_ASSERT(hparams.n_embd_head_v(0) % ggml_blck_size(type_v) == 0);
     if (!hparams.vocab_only) {
         // initialize backends
 #if defined(GGML_USE_METAL)
@@ -5893,7 +5906,7 @@ struct llama_context * llama_init_from_model(
             // build worst-case graph
             int n_past = cparams.n_ctx - n_tokens;
             llama_token token = llama_token_bos(&ctx->model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-            ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true);
+            ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, cparams.worst_graph_tokens);
 
             // initialize scheduler with the worst-case graph
             bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
@@ -6075,6 +6088,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_GEMMA4:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:

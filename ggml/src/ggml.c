@@ -1677,6 +1677,23 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 4,
     },
+    [GGML_TYPE_Q1_0_G128] = {
+        .type_name                = "q1_0_g128",
+        .blck_size                = QK1_0_G128,
+        .type_size                = sizeof(block_q1_0_g128),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q1_0_g128,
+        .from_float               = quantize_row_q1_0_g128,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_q1_0_g128_ref,
+        .vec_dot                  = vec_dot_q1_0_g128_q8_0,
+#if defined __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
+        .vec_dot_type             = GGML_TYPE_Q8_0_X4,
+#endif
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_IQ3_K] = {
         .type_name                = "iq3_k",
         .blck_size                = QK_K,
@@ -3971,12 +3988,15 @@ static ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x,
     int i = 0;
     ggml_float sum = 0;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
+    __m512 vsum = _mm512_setzero_ps();
     for (; i + 15 < n; i += 16) {
         __m512 val = ggml_v_expf(_mm512_sub_ps(_mm512_loadu_ps(x + i),
                                                _mm512_set1_ps(max)));
         _mm512_storeu_ps(y + i, val);
-        sum += (ggml_float)_mm512_reduce_add_ps(val);
+        vsum = _mm512_add_ps(vsum, val);
+        //sum += (ggml_float)_mm512_reduce_add_ps(val);
     }
+    sum = (ggml_float)_mm512_reduce_add_ps(vsum);
 #elif defined(__AVX2__) && defined(__FMA__)
     for (; i + 7 < n; i += 8) {
         __m256 val = ggml_v_expf(_mm256_sub_ps(_mm256_loadu_ps(x + i),
@@ -4897,6 +4917,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_IQ2_KT:        wtype = GGML_TYPE_IQ2_KT;   break;
         case GGML_FTYPE_MOSTLY_IQ3_KT:        wtype = GGML_TYPE_IQ3_KT;   break;
         case GGML_FTYPE_MOSTLY_IQ4_KT:        wtype = GGML_TYPE_IQ4_KT;   break;
+        case GGML_FTYPE_MOSTLY_Q1_0_128:      wtype = GGML_TYPE_Q1_0_G128;break;
         case GGML_FTYPE_MOSTLY_IQ3_K:         wtype = GGML_TYPE_IQ3_K;    break;
         case GGML_FTYPE_MOSTLY_IQ3_KS:        wtype = GGML_TYPE_IQ3_KS;   break;
         case GGML_FTYPE_MOSTLY_IQ2_KL:        wtype = GGML_TYPE_IQ2_KL;   break;
@@ -12814,6 +12835,7 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ2_KL:
@@ -13367,6 +13389,7 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ2_KL:
@@ -13546,6 +13569,7 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ2_KL:
@@ -16933,6 +16957,7 @@ static int ggml_compute_forward_mul_mat(
 
     if (src1->type != vec_dot_type && dst->type == GGML_TYPE_F32) {
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+#if GGML_USE_IQK_MULMAT
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
                     ne02, ne03, ne12, ne13, nb02, nb03, row_size*ne11, row_size*ne11*ne12,
                     nb2/sizeof(float), nb3/sizeof(float),
@@ -16959,6 +16984,7 @@ static int ggml_compute_forward_mul_mat(
             }
         }
         return node_n;
+#endif
     }
 
     if (ith == 0) {
@@ -17871,6 +17897,7 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ2_KL:
@@ -18294,6 +18321,7 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ2_KL:
@@ -18623,6 +18651,7 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ2_KL:
@@ -19380,6 +19409,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ2_KL:
@@ -21667,14 +21697,14 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
 #if GGML_USE_IQK_MULMAT
     // For now we do not implement sinks in the iqk FA implementation
-    if (iqk_flash_attn_noalibi(q->type, mask->type, max_bias,
+    if (iqk_flash_attn_noalibi(q->type, mask ? mask->type : GGML_TYPE_F16, max_bias,
                 q->ne[3], q->ne[2], q->nb[3], q->nb[2],
                 k->ne[3], k->ne[2], k->nb[3], k->nb[2],
                 v->ne[3], v->ne[2], v->nb[3], v->nb[2],
                 dst->ne[2], dst->ne[1], dst->nb[1],
                 k->type, v->type,
-                Dk, Dv, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1],
-                q->data, k->data, v->data, mask->data, sinks ? sinks->data : NULL,
+                Dk, Dv, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask ? mask->nb[1] : 0,
+                q->data, k->data, v->data, mask ? mask->data : NULL, sinks ? sinks->data : NULL,
                 scale, softcap, (float *)dst->data,
                 params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, ith, nth, dst->op_params[4])) return;
 
@@ -22593,12 +22623,14 @@ static void ggml_compute_forward_delta_net_f32(
 
     int repeat_type = dst->op_params[0];
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs,
                 src2->nb[1]/sizeof(float), src2->nb[2]/sizeof(float), src2->nb[3]/sizeof(float),
                 q_data, k_data, v_data, g_data, beta_data, state_in,
                 out_data, state_out, ith, nth)) {
         return;
     }
+#endif
 
     // TODO: fix this in case we need to fall back to it.
     const int64_t total_heads = n_heads * n_seqs;
@@ -24201,11 +24233,19 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_MOE_FUSED_UP_GATE:
             {
+#if GGML_USE_IQK_MULMAT
                 ggml_compute_forward_mul_mat_id_up_gate(params, tensor);
+#else
+                GGML_ABORT("GGML_OP_MOE_FUSED_UP_GATE requires GGML_USE_IQK_MULMAT");
+#endif
             } break;
         case GGML_OP_FUSED_UP_GATE:
             {
+#if GGML_USE_IQK_MULMAT
                 ggml_compute_forward_mul_mat_up_gate(params, tensor);
+#else
+                GGML_ABORT("GGML_OP_FUSED_UP_GATE requires GGML_USE_IQK_MULMAT");
+#endif
             } break;
         case GGML_OP_OUT_PROD:
             {
@@ -24295,10 +24335,14 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                     cgraph->nodes[i+0]->type == GGML_TYPE_F32  &&
                     cgraph->nodes[i+4]->type == GGML_TYPE_F32  &&
                     cgraph->nodes[i+3]->type == GGML_TYPE_I32) {
+#if GGML_USE_IQK_MULMAT
                     iqk_topk_moe(cgraph->nodes[i]->ne[0], cgraph->nodes[i+4]->ne[1], cgraph->nodes[i]->ne[1],
                             (const float *)cgraph->nodes[i]->data, (float *)cgraph->nodes[i+4]->data, (int32_t *)cgraph->nodes[i+3]->data,
                             params->ith, params->nth);
                     i += 4;
+#else
+                    ggml_compute_forward_soft_max(params, tensor);
+#endif
                 } else {
                     ggml_compute_forward_soft_max(params, tensor);
                 }
@@ -28457,6 +28501,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ2_KT:  result = quantize_iq2_kt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ3_KT:  result = quantize_iq3_kt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KT:  result = quantize_iq4_kt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q1_0_G128: result = quantize_q1_0_g128(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ3_K:   result = quantize_iq3_k  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ3_KS:  result = quantize_iq3_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ2_KL:  result = quantize_iq2_kl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
