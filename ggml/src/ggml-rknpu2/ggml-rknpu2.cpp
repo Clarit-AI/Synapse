@@ -55,6 +55,29 @@ inline void hash_combine(std::size_t& seed, const T& v) {
     seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
 
+static bool parse_debug_env(const char * env_name) {
+    const char * env = getenv(env_name);
+    if (!env || env[0] == '\0') {
+        return false;
+    }
+
+    return strcmp(env, "0") != 0;
+}
+
+static uint64_t query_rknn_dma_allocated_size(rknn_context ctx) {
+    if (ctx == 0) {
+        return 0;
+    }
+
+    rknn_mem_size mem_size;
+    memset(&mem_size, 0, sizeof(mem_size));
+    if (rknn_query(ctx, RKNN_QUERY_MEM_SIZE, &mem_size, sizeof(mem_size)) != RKNN_SUCC) {
+        return 0;
+    }
+
+    return mem_size.total_dma_allocated_size;
+}
+
 // Hasher for std::pair
 struct PairHasher {
     template <class T1, class T2>
@@ -210,7 +233,7 @@ struct rknpu_matmul_context {
 // Backend main context
 struct ggml_backend_rknpu_context {
     using matmul_cache_key = std::tuple<int, int, int, int, int>;
-    using b_mem_cache_key = std::pair<ggml_backend_buffer_t, size_t>;
+    using b_mem_cache_key = std::tuple<ggml_backend_buffer_t, size_t, size_t, uintptr_t>;
 
     std::string name;
     std::mutex mutex;
@@ -218,12 +241,13 @@ struct ggml_backend_rknpu_context {
     int split_factor = 1;  // Selected via RKNN_SPLIT_FACTOR env var
     size_t matmul_ctx_cache_size = 64;
     size_t b_mem_handle_cache_size = 64;
+    bool debug_b_mem = false;
 
     // RKNN matmul contexts cache
     LruCache<matmul_cache_key, std::shared_ptr<rknpu_matmul_context>, TupleHasher> matmul_ctx_cache;
 
     // B-matrices handle cache (from fd)
-    LruCache<b_mem_cache_key, std::shared_ptr<rknn_tensor_mem>, PairHasher> b_mem_handle_cache;
+    LruCache<b_mem_cache_key, std::shared_ptr<rknn_tensor_mem>, TupleHasher> b_mem_handle_cache;
 
     // A- and C-matrices cache (from create_mem)
     std::unordered_map<std::tuple<int, int, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> a_buffer_cache;
@@ -273,17 +297,46 @@ struct ggml_backend_rknpu_context {
     }
 
     std::shared_ptr<rknn_tensor_mem> get_b_mem_handle(
+        const struct ggml_tensor * src0,
         ggml_backend_buffer_t src0_buffer,
         ggml_backend_rknpu_buffer_context * src0_buf_ctx,
         size_t total_offset,
         size_t segment_size_bytes,
+        size_t segment_idx,
+        const MatrixSegment & segment,
         const std::shared_ptr<rknpu_matmul_context> & matmul_ctx) {
         std::lock_guard<std::mutex> lock(mutex);
-        const auto key = std::make_pair(src0_buffer, total_offset);
+        const auto key = std::make_tuple(src0_buffer, total_offset, segment_size_bytes, (uintptr_t) matmul_ctx->ctx);
         if (auto * cached = b_mem_handle_cache.find(key)) {
+            if (debug_b_mem) {
+                fprintf(stderr,
+                        "RKNPU2[B_MEM]: cache hit tensor=%s idx=%zu core=%d buffer=%p offset=%zu size=%zu ctx=%p dma=%llu\n",
+                        src0->name,
+                        segment_idx,
+                        segment.core_id,
+                        (void *) src0_buffer,
+                        total_offset,
+                        segment_size_bytes,
+                        (void *) (uintptr_t) matmul_ctx->ctx,
+                        (unsigned long long) query_rknn_dma_allocated_size(matmul_ctx->ctx));
+            }
             return *cached;
         }
 
+        if (debug_b_mem) {
+            fprintf(stderr,
+                    "RKNPU2[B_MEM]: cache miss tensor=%s idx=%zu core=%d buffer=%p offset=%zu size=%zu ctx=%p fd=%d\n",
+                    src0->name,
+                    segment_idx,
+                    segment.core_id,
+                    (void *) src0_buffer,
+                    total_offset,
+                    segment_size_bytes,
+                    (void *) (uintptr_t) matmul_ctx->ctx,
+                    src0_buf_ctx->dma_buf.fd);
+        }
+
+        errno = 0;
         rknn_tensor_mem * mem = rknn_create_mem_from_fd(
             matmul_ctx->ctx,
             src0_buf_ctx->dma_buf.fd,
@@ -291,6 +344,18 @@ struct ggml_backend_rknpu_context {
             segment_size_bytes,
             total_offset);
         if (!mem) {
+            fprintf(stderr,
+                    "RKNPU2[B_MEM]: import failed tensor=%s idx=%zu core=%d buffer=%p offset=%zu size=%zu ctx=%p fd=%d errno=%d dma=%llu\n",
+                    src0->name,
+                    segment_idx,
+                    segment.core_id,
+                    (void *) src0_buffer,
+                    total_offset,
+                    segment_size_bytes,
+                    (void *) (uintptr_t) matmul_ctx->ctx,
+                    src0_buf_ctx->dma_buf.fd,
+                    errno,
+                    (unsigned long long) query_rknn_dma_allocated_size(matmul_ctx->ctx));
             return nullptr;
         }
 
@@ -528,13 +593,29 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                         size_t total_offset = src0_base_offset_in_dma + current_offset_in_tensor;
                         
                         mem_B_segments[idx] = backend_ctx->get_b_mem_handle(
+                            src0,
                             src0_buffer,
                             src0_buf_ctx,
                             total_offset,
                             segment_size_bytes,
+                            idx,
+                            active_segments[idx],
                             matmul_ctx);
                         if (!mem_B_segments[idx]) return GGML_STATUS_FAILED;
-                        RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_B_segments[idx].get(), &matmul_ctx->io_attr.B), "set_io_mem B segment");
+                        const int ret = rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_B_segments[idx].get(), &matmul_ctx->io_attr.B);
+                        if (ret < 0) {
+                            fprintf(stderr,
+                                    "RKNPU2[B_MEM]: set_io_mem failed tensor=%s idx=%zu core=%d offset=%zu size=%zu ctx=%p ret=%d dma=%llu\n",
+                                    src0->name,
+                                    idx,
+                                    active_segments[idx].core_id,
+                                    total_offset,
+                                    segment_size_bytes,
+                                    (void *) (uintptr_t) matmul_ctx->ctx,
+                                    ret,
+                                    (unsigned long long) query_rknn_dma_allocated_size(matmul_ctx->ctx));
+                        }
+                        RKNN_CHECK(ret, "set_io_mem B segment");
                         break;
                     }
                 }
@@ -1284,16 +1365,18 @@ static ggml_backend_t ggml_backend_rknpu_device_init_backend(ggml_backend_dev_t 
     ctx->split_factor = parse_split_factor_env();
     ctx->b_mem_handle_cache_size = parse_cache_size_env("RKNPU_B_CACHE_SIZE", 64);
     ctx->matmul_ctx_cache_size = parse_cache_size_env("RKNPU_CTX_CACHE_SIZE", 64);
+    ctx->debug_b_mem = parse_debug_env("RKNPU_DEBUG_B_MEM");
     ctx->b_mem_handle_cache.capacity = ctx->b_mem_handle_cache_size;
     ctx->matmul_ctx_cache.capacity = ctx->matmul_ctx_cache_size;
     rknpu2_configuration::set_split_factor(ctx->split_factor);
     fprintf(stderr,
-            "RKNPU2: Using device '%s' with core_mask=%d, split_factor=%d, b_cache_size=%zu, ctx_cache_size=%zu\n",
+            "RKNPU2: Using device '%s' with core_mask=%d, split_factor=%d, b_cache_size=%zu, ctx_cache_size=%zu, debug_b_mem=%d\n",
             device_name,
             ctx->core_mask,
             ctx->split_factor,
             ctx->b_mem_handle_cache_size,
-            ctx->matmul_ctx_cache_size);
+            ctx->matmul_ctx_cache_size,
+            ctx->debug_b_mem ? 1 : 0);
     
     static const struct ggml_backend_i rknpu_backend_interface = {
         /* .get_name                = */ ggml_backend_rknpu_name,
