@@ -10,7 +10,7 @@
     <a href="https://deepwiki.com/Clarit-AI/Synapse">
       <img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" />
     </a>
-    <a href="https://svg.khaentertainment.com/go"><img src="https://svg.khaentertainment.com/badge.svg?gold=0" alt="Built with Showrunner" /></a>
+    <a href="https://svg.khaentertainment.com/go?project=Clarit-AI/Synapse"><img src="https://svg.khaentertainment.com/badge.svg?gold=0&amp;project=Clarit-AI/Synapse" alt="Built with Showrunner" /></a>
   </p>
 
   <h3>Heterogeneous LLM inference for the edge</h3>
